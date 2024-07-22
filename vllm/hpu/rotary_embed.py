@@ -114,6 +114,13 @@ class HpuRotaryEmbedding(nn.Module):
                 cos = cos[positions].unsqueeze(2)
                 sin = sin[positions].unsqueeze(2)
             query, key = FusedRoPE.apply(query, cos, sin, 0), FusedRoPE.apply(key, cos, sin, 0)
+            if self.dim != self.head_size:
+                assert (self.head_size % self.dim) == 0
+                num = self.head_size // self.dim 
+                sin = sin.repeat(1,1,1,num)
+                cos = cos.repeat(1,1,1,num)
+            query, key = FusedRoPE.apply(query, cos, sin,
+                                         0), FusedRoPE.apply(key, cos, sin, 0)
         else:
             query, key = apply_rotary_pos_emb(query, key, cos, sin, positions)
         return query.reshape((query.shape[0], query.shape[1], query.shape[2] * query.shape[3])), key.reshape((key.shape[0], key.shape[1], key.shape[2] * key.shape[3]))
