@@ -478,7 +478,7 @@ def get_rope(
            rope_scaling_args)
     if key in _ROPE_DICT:
         return _ROPE_DICT[key]
-    if rope_scaling is None:
+    if rope_scaling is None or rope_scaling['rope_type'] == 'llama3':
         if is_hpu():
             rotary_emb = HpuRotaryEmbedding(head_size, rotary_dim, max_position, base,
                                             is_neox_style)

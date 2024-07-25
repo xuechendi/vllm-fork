@@ -157,6 +157,7 @@ def warmup_range(config: Tuple[int, int, int]):
     ramp_up = itertools.accumulate(base, func=operator.mul, initial=bmin)
     ramp_up = itertools.takewhile(lambda x: x < bstep and x <= bmax, ramp_up)
     stable = range(max(bmin, bstep), bmax + 1, bstep)
+    print("To warm up range for ramp_up is ", list(ramp_up), ", for stable is ", list(stable))
     return list(ramp_up) + list(stable)
 
 
@@ -400,6 +401,19 @@ class HabanaModelRunner:
                     parallel_config=self.parallel_config,
                     scheduler_config=self.scheduler_config,
                 )
+                total_param_size = 0
+                total_buffer_size = 0
+                for param in self.model.parameters():
+                    param_size = param.numel() * param.element_size()
+                    total_param_size += param_size
+
+                for buffer in self.model.buffers():
+                    buffer_size = buffer.numel() * buffer.element_size()
+                    total_buffer_size += buffer_size
+
+                size_all_mb = (total_param_size + total_buffer_size) / 1024**2
+                print('Model Size: {:.3f} MB'.format(size_all_mb), "total_param_size: {:.3f} MB".format(total_param_size / 1024**2), "total_buffer_size: {:.3f} MB".format(total_buffer_size / 1024**2))
+
             logger.info(f"Pre-loading model weights on {next(self.model.parameters()).device} took {m_getmodel.get_summary_string()}")
 
             import habana_frameworks.torch.core as htcore
@@ -1020,6 +1034,8 @@ class HabanaModelRunner:
         else:
             model_event_name = 'model_executable'
         with self.profiler.record_event('internal', model_event_name):
+            print("input_ids shape is ", execute_model_kwargs["input_ids"].shape, ", used memory is ", execute_model_kwargs["input_ids"].element_size() * execute_model_kwargs["input_ids"].numel() / 1024 / 1024, "MB")
+            print("positions shape is ", execute_model_kwargs["positions"].shape, ", used memory is ", execute_model_kwargs["positions"].element_size() * execute_model_kwargs["positions"].numel() / 1024 / 1024, "MB")
             hidden_states = self.model.forward(**execute_model_kwargs, selected_token_indices=sampling_metadata.selected_token_indices)
 
         if self.scheduler_config.enable_delayed_sampling:
@@ -1029,7 +1045,10 @@ class HabanaModelRunner:
                 sampled_token_ids = output.sampled_token_ids.tolist()
                 for seq_group_output in output.outputs[:real_batch_size]:
                     for sample in seq_group_output.samples:
-                        sample.output_token = sampled_token_ids[sample.output_token][0]
+                        try:
+                            sample.output_token = sampled_token_ids[sample.output_token][0]
+                        except:
+                            raise ValueError(f"sampled_token_ids: {sampled_token_ids}, output_token: {sample.output_token}")
                 output = output
             else:
                 # For prompts compose empty output

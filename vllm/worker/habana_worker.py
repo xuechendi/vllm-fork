@@ -176,6 +176,11 @@ class HabanaWorker(WorkerBase):
         self.cache_engine = CacheEngine(self.cache_config, self.model_config,
                                         self.parallel_config)
         self.hpu_cache = self.cache_engine.gpu_cache
+        print("cache_config is ", self.cache_config.__dict__)
+        print("parallel config is ", self.parallel_config.__dict__)
+        print("allocated hpu cache shape is ", len(self.hpu_cache), " * ", [j.shape for j in self.hpu_cache[0]])
+        print("One k_cache takes memory of ", self.hpu_cache[0][0].element_size() * self.hpu_cache[0][0].numel() / 1024 / 1024, "MB")
+        print("Total allocated mem is ", sum([i.element_size() * i.numel() for j in self.hpu_cache for i in j]) / 1024 / 1024, "MB")
         htorch.hpu.synchronize() # we want to materialize cache tensors before we proceed with graph capture/execution
 
     def _warm_up_model(self) -> None:
