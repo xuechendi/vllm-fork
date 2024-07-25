@@ -1,7 +1,7 @@
 # DEV prepare
 ```bash
 export port_number="8008"
-export HUGGINGFACEHUB_API_TOKEN=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
+export HUGGINGFACEHUB_API_TOKEN=xxx
 
 docker run -it --runtime=habana --name="vllm-gaudi-dev-chendi" -p $port_number:80 -v `pwd`:/root/vllm -e HABANA_VISIBLE_DEVICES=all -e OMPI_MCA_btl_vader_single_copy_mechanism=none --cap-add=sys_nice --ipc=host --net=host -e HF_TOKEN=${HUGGINGFACEHUB_API_TOKEN} vault.habana.ai/gaudi-docker/1.16.0/ubuntu22.04/habanalabs/pytorch-installer-2.2.2:latest /bin/bash
 
