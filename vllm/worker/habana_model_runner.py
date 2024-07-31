@@ -21,7 +21,7 @@ from vllm.attention import (AttentionMetadata, AttentionMetadataPerStage,
                             get_attn_backend)
 from vllm.config import (DeviceConfig, LoadConfig, CacheConfig, LoRAConfig, ModelConfig,
                          ParallelConfig, SchedulerConfig, VisionLanguageConfig)
-from vllm.distributed import broadcast_tensor_dict, get_tensor_model_parallel_world_size
+from vllm.distributed import broadcast_tensor_dict, broadcast, get_tensor_model_parallel_world_size
 from vllm.distributed.parallel_state import get_cpu_world_group
 from vllm.logger import init_logger
 from vllm.lora.layers import LoRAMapping
@@ -411,9 +411,11 @@ class HabanaModelRunner:
                     htcore.hpu_initialize(self.model, mark_only_scales_as_const=True)
                 logger.info(f"Preparing model with HQT took {m_hqt.get_summary_string()}")
             else:
+                logger.info(f"start with model load to hpu is driver{self.is_driver_worker}")
                 self.model = self.model.to("hpu")
                 htcore.mark_step()
             torch.hpu.synchronize()
+            logger.info(f"done with model load to hpu is driver{self.is_driver_worker}")
 
             if self.scheduler_config.enable_delayed_sampling:
                 self.model.sampler.include_gpu_probs_tensor = True
@@ -943,6 +945,7 @@ class HabanaModelRunner:
         kv_caches: List[torch.Tensor],
         warmup_mode=False,
     ) -> Optional[SamplerOutput]:
+        #logger.info(f"libin debug execute_model  start driver {self.is_driver_worker}")
         if self.is_driver_worker:
             event_start = self.profiler.get_timestamp_us()
             is_prompt = seq_group_metadata_list[0].is_prompt
@@ -955,12 +958,13 @@ class HabanaModelRunner:
             batch_size_padding = batch_size_padded - real_batch_size
             seq_group_metadata_list = seq_group_metadata_list.copy()
             seq_group_metadata_list.extend(seq_group_metadata_list[0] for _ in range(batch_size_padding))
+
         with self.profiler.record_event('internal', 'prepare_input_tensors'):
             (input_tokens, input_positions, attn_metadata, sampling_metadata,
             lora_requests, lora_mapping, multi_modal_input
             ) = self.prepare_input_tensors(seq_group_metadata_list)
             is_prompt = attn_metadata.prefill_metadata is not None
-
+        #logger.info(f"libin debug execute_model done with prepare input {self.is_driver_worker}")
         if self.lora_config:
             self.set_active_loras(lora_requests, lora_mapping)
 
@@ -980,47 +984,52 @@ class HabanaModelRunner:
             execute_model_kwargs.update({"bypass_hpu_graphs":not use_graphs})
         htorch.core.mark_step()
         input_ids = None
-        # Sample the next token based on previous logits if any.
-        if self.scheduler_config.enable_delayed_sampling and self.is_driver_worker and not is_prompt:
-            logits_ids_list = []
-            logits_tensor = None
-            logits_tensor_list = []
-            for seq_group_metadata in seq_group_metadata_list:
-                assert len(seq_group_metadata.seq_data) == 1
-                for seq_data in seq_group_metadata.seq_data.values():
-                    if seq_data.prev_logits is not None:
-                        if logits_tensor is None:
-                            logits_tensor = seq_data.prev_logits
-                        if seq_data.prev_logits is logits_tensor:
-                            # accumulate row ids from the same tensor
-                            logits_ids_list.append(seq_data.prev_logits_idx)
+        if self.is_driver_worker:
+            # Sample the next token based on previous logits if any.
+            if self.scheduler_config.enable_delayed_sampling and not is_prompt:
+                logits_ids_list = []
+                logits_tensor = None
+                logits_tensor_list = []
+ 
+                for seq_group_metadata in seq_group_metadata_list:
+                    assert len(seq_group_metadata.seq_data) == 1
+                    count =0
+                    for seq_data in seq_group_metadata.seq_data.values():
+
+                        if seq_data.prev_logits is not None:
+                            if logits_tensor is None:
+                                logits_tensor = seq_data.prev_logits
+                            if seq_data.prev_logits is logits_tensor:
+                                # accumulate row ids from the same tensor
+                                logits_ids_list.append(seq_data.prev_logits_idx)
+                            else:
+                                # new logits tensor, gather all previously collected rows
+                                logits_tensor_list.append(logits_tensor[torch.tensor(logits_ids_list, device=seq_data.prev_logits.device)])
+                                logits_ids_list = [seq_data.prev_logits_idx]
+                                logits_tensor = seq_data.prev_logits
                         else:
-                            # new logits tensor, gather all previously collected rows
-                            logits_tensor_list.append(logits_tensor[torch.tensor(logits_ids_list, device=seq_data.prev_logits.device)])
-                            logits_ids_list = [seq_data.prev_logits_idx]
-                            logits_tensor = seq_data.prev_logits
-                    else:
-                        # warmup only, TODO add a check
-                        logits_tensor_list.append(torch.zeros([1, 32000], dtype=torch.float, device="hpu"))
-            if logits_tensor is not None:
-                logits_tensor_list.append(logits_tensor[torch.tensor(logits_ids_list, device=seq_data.prev_logits.device)])
+                            # warmup only, TODO add a check
+                            if warmup_mode:
+                                logits_tensor_list.append(torch.zeros([1, 32000], dtype=torch.float, device="hpu"))
+                if logits_tensor is not None:
+                    logits_tensor_list.append(logits_tensor[torch.tensor(logits_ids_list, device=logits_tensor.device)]) #seq_data.prev_logits.device)])
 
-            prev_logits = torch.cat(logits_tensor_list, dim=0)
+                prev_logits = torch.cat(logits_tensor_list, dim=0)
 
-            with self.profiler.record_event('internal', f'sample_{"prompt" if is_prompt else "decode"}_bs{batch_size}_seq{seq_len}'):
-                output = self.model.sample(
-                    logits=prev_logits,
-                    sampling_metadata=sampling_metadata,
-                )
-            #TODO: check why broadcast failed for float tensor use dict instead
-            model_kwargs = { }
-            model_kwargs["input_ids"] =  output.sampled_token_ids
-            broadcast_tensor_dict(model_kwargs, src=0)
-            input_ids = output.sampled_token_ids
-        elif self.scheduler_config.enable_delayed_sampling and not is_prompt:
-            model_kwargs = broadcast_tensor_dict(src=0)
-            input_ids = model_kwargs["input_ids"]
+                with self.profiler.record_event('internal', f'sample_{"prompt" if is_prompt else "decode"}_bs{batch_size}_seq{seq_len}'):
+                    output = self.model.sample(
+                        logits=prev_logits,
+                        sampling_metadata=sampling_metadata,
+                    )
+                model_kwargs = { }
+                model_kwargs["input_ids"] =  output.sampled_token_ids
+                broadcast_tensor_dict(model_kwargs, src=0)
 
+                input_ids = output.sampled_token_ids
+        else:
+            if self.scheduler_config.enable_delayed_sampling and not is_prompt:
+                model_kwargs = broadcast_tensor_dict(src=0)
+                input_ids = model_kwargs["input_ids"]
         if input_ids is not None:
             execute_model_kwargs["input_ids"] = input_ids
             htorch.core.mark_step()
@@ -1034,70 +1043,76 @@ class HabanaModelRunner:
             if tp_size > 1:
                 execute_model_kwargs["input_ids"] = execute_model_kwargs["input_ids"].clone()
         with self.profiler.record_event('internal', model_event_name):
+            #logger.info(f"libin debug execute_modek model forward done is driver {self.is_driver_worker} { execute_model_kwargs['input_ids'].shape}")
             hidden_states = self.model.forward(**execute_model_kwargs, selected_token_indices=sampling_metadata.selected_token_indices)
+        if self.scheduler_config.enable_delayed_sampling:
+            if self.is_driver_worker:
+                if is_prompt:
+                    # For prompts compose empty output
+                    from vllm.sequence import (Logprob, SamplerOutput, SequenceGroupOutput, SequenceOutput)
+                    sampler_output = []
+                    for seq_group in sampling_metadata.seq_groups:
+                        seq_ids = seq_group.seq_ids
+                        next_token_id, parent_id = -1, 0
+                        seq_outputs = []
+                        seq_outputs.append(
+                            SequenceOutput(seq_ids[parent_id], next_token_id, {-1: Logprob(0.0)}))
+                        sampler_output.append(
+                            SequenceGroupOutput(seq_outputs, None))
 
-        if self.scheduler_config.enable_delayed_sampling and self.is_driver_worker:
-            if not is_prompt:
-                htorch.core.mark_step()
-                # Only after dispatching next model.forward() read and update the previous token ids to return
-                sampled_token_ids = output.sampled_token_ids.tolist()
-                for seq_group_output in output.outputs[:real_batch_size]:
-                    for sample in seq_group_output.samples:
-                        sample.output_token = sampled_token_ids[sample.output_token][0]
-                output = output
-            else:
-                # For prompts compose empty output
-                from vllm.sequence import (Logprob, SamplerOutput, SequenceGroupOutput, SequenceOutput)
-                sampler_output = []
-                for seq_group in sampling_metadata.seq_groups:
-                    seq_ids = seq_group.seq_ids
-                    next_token_id, parent_id = -1, 0
-                    seq_outputs = []
-                    seq_outputs.append(
-                        SequenceOutput(seq_ids[parent_id], next_token_id, {-1: Logprob(0.0)}))
-                    sampler_output.append(
-                        SequenceGroupOutput(seq_outputs, None))
+                    sampled_token_probs, logprobs_tensor, sampled_token_ids = (None, None, None)
+                    output = SamplerOutput(
+                        outputs=sampler_output,
+                        sampled_token_probs=sampled_token_probs,
+                        sampled_token_ids=sampled_token_ids,
+                        logprobs=logprobs_tensor,
+                    )
+                    output.outputs = output.outputs[:real_batch_size]
+                    htorch.core.mark_step()
+                else:
+                    htorch.core.mark_step()
+                    # Only after dispatching next model.forward() read and update the previous token ids to return
+                    sampled_token_ids = output.sampled_token_ids.tolist()
+                    for seq_group_output in output.outputs[:real_batch_size]:
+                        for sample in seq_group_output.samples:
+                            sample.output_token = sampled_token_ids[sample.output_token][0]
+                    output = output
 
-                sampled_token_probs, logprobs_tensor, sampled_token_ids = (None, None, None)
-                output = SamplerOutput(
-                    outputs=sampler_output,
-                    sampled_token_probs=sampled_token_probs,
-                    sampled_token_ids=sampled_token_ids,
-                    logprobs=logprobs_tensor,
-                )
+                    output.outputs = output.outputs[:real_batch_size]
+                    htorch.core.mark_step()
 
-            output.outputs = output.outputs[:real_batch_size]
+            # Compute the logits.
+            with self.profiler.record_event('internal', f'compute_logits_{"prompt" if is_prompt else "decode"}_bs{batch_size}_seq{seq_len}'):
+                sampling_metadata.selected_token_indices = None
+                logits = self.model.compute_logits(hidden_states, sampling_metadata)
+            if self.is_driver_worker: 
+                for idx, seq_group_metadata in enumerate(seq_group_metadata_list):
+                    assert len(seq_group_metadata.seq_data) == 1
+                    for seq_data in seq_group_metadata.seq_data.values():
+                        seq_data.prev_logits = logits
+                        seq_data.prev_logits_idx = idx
             htorch.core.mark_step()
+            if not self.is_driver_worker:
+                # Only perform sampling in the driver worker.
+                return None
+        else: #if not self.scheduler_config.enable_delayed_sampling:
+            # Compute logits
+            with self.profiler.record_event('internal', f'compute_logits_{"prompt" if is_prompt else "decode"}_bs{batch_size}_seq{seq_len}'):
+                sampling_metadata.selected_token_indices = None
+                logits = self.model.compute_logits(hidden_states, sampling_metadata)
+            # Sample the next token only for driver worker
+            if self.is_driver_worker:
+                with self.profiler.record_event('internal', f'sample_{"prompt" if is_prompt else "decode"}_bs{batch_size}_seq{seq_len}'):
+                    output = self.model.sample(
+                        logits=logits,
+                        sampling_metadata=sampling_metadata,
+                    )
+                output.outputs = output.outputs[:real_batch_size]
+                htorch.core.mark_step()
+            else:
+                return None
 
-        # Compute the logits.
-        with self.profiler.record_event('internal', f'compute_logits_{"prompt" if is_prompt else "decode"}_bs{batch_size}_seq{seq_len}'):
-            sampling_metadata.selected_token_indices = None
-            logits = self.model.compute_logits(hidden_states, sampling_metadata)
-
-        if self.scheduler_config.enable_delayed_sampling and self.is_driver_worker:
-            for idx, seq_group_metadata in enumerate(seq_group_metadata_list):
-                assert len(seq_group_metadata.seq_data) == 1
-                for seq_data in seq_group_metadata.seq_data.values():
-                    seq_data.prev_logits = logits
-                    seq_data.prev_logits_idx = idx
-
-        htorch.core.mark_step()
-
-        # Only perform sampling in the driver worker.
-        if not self.is_driver_worker:
-            return None
-
-        # Sample the next token.
-        if not self.scheduler_config.enable_delayed_sampling:
-            with self.profiler.record_event('internal', f'sample_{"prompt" if is_prompt else "decode"}_bs{batch_size}_seq{seq_len}'):
-                output = self.model.sample(
-                    logits=logits,
-                    sampling_metadata=sampling_metadata,
-                )
-            output.outputs = output.outputs[:real_batch_size]
-        htorch.core.mark_step()
-
-        if self.is_driver_worker and self.profiler.enabled:
+        if self.profiler.enabled and self.is_driver_worker:
             # Stop recording 'execute_model' event
             self.profiler.end()
             event_end = self.profiler.get_timestamp_us()
@@ -1263,14 +1278,14 @@ class HabanaModelRunner:
         self.profiler.end()
 
     def shutdown_hqt(self):
-        print('hqt shutdown')
+        logger.info('hqt shutdown')
         if model_config := getattr(self, "model_config", None):
             if getattr(model_config, "quantization", None) == 'hqt':
-                print('hqt shutdown start')
+                logger.info('hqt shutdown start')
                 import habana_quantization_toolkit
                 if habana_quantization_toolkit is not None:
                     habana_quantization_toolkit.finish_measurements(self.model.model)
-                print('hqt shutdown')
+                logger.info('hqt shutdown')
 
     def __del__(self):
         self.shutdown_hqt()
