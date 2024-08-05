@@ -170,7 +170,6 @@ class LLM:
             A list of `RequestOutput` objects containing the generated
             completions in the same order as the input prompts.
         """
-        #print("libin debug generate prompts ")
         if prompts is None and prompt_token_ids is None:
             raise ValueError("Either prompts or prompt_token_ids must be "
                              "provided.")
@@ -220,7 +219,6 @@ class LLM:
                     data=multi_modal_data.data[i].unsqueeze(0))
                 if multi_modal_data else None,
             )
-        #print("libin debug llm gnerate run_engine")
         return self._run_engine(use_tqdm)
 
     def _add_request(
@@ -248,16 +246,13 @@ class LLM:
                         dynamic_ncols=True)
         # Run the engine.
         outputs: List[RequestOutput] = []
-        count=0
         while self.llm_engine.has_unfinished_requests():
-            #print("libin debug run engine llm engine step")
             step_outputs = self.llm_engine.step()
             for output in step_outputs:
                 if output.finished:
                     outputs.append(output)
                     if use_tqdm:
                         pbar.update(1)
-            count=count+1
         if use_tqdm:
             pbar.close()
         # Sort the outputs by request ID.
