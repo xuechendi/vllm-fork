@@ -109,7 +109,7 @@ class HabanaAttentionImpl(AttentionImpl, torch.nn.Module):
 
         assert self.num_heads % self.num_kv_heads == 0
         self.num_queries_per_kv = self.num_heads // self.num_kv_heads
-
+        self.prefill_usefusedsdpa = os.getenv('VLLM_PREFILL_USE_FUSESDAPA', '0') == '1'
         suppored_head_sizes = HabanaPagedAttention.get_supported_head_sizes()
         if head_size not in suppored_head_sizes:
             raise ValueError(
@@ -126,7 +126,6 @@ class HabanaAttentionImpl(AttentionImpl, torch.nn.Module):
         kv_scale: float,
     ) -> torch.Tensor:
         """Forward pass with xFormers and PagedAttention.
-
         Args:
             query: shape = [num_tokens, num_heads * head_size]
             key: shape = [num_tokens, num_kv_heads * head_size]
@@ -160,8 +159,9 @@ class HabanaAttentionImpl(AttentionImpl, torch.nn.Module):
             value_cache = self.value_cache(value, value_cache, block_indices, block_offsets)
 
         if prefill_meta := attn_metadata.prefill_metadata:
-            # Prompt run.
-            assert prefill_meta.attn_bias is not None, 'attn_bias must be set before calling model.forward!'
+            if not self.prefill_usefusedsdpa:
+                # Prompt run.
+                assert prefill_meta.attn_bias is not None, 'attn_bias must be set before calling model.forward!'
             query_shape = (batch_size, seq_len, self.num_heads, self.head_size)
             kv_shape = (batch_size, seq_len_kv, self.num_kv_heads, self.head_size)
             out = xops.prompt_attention(
@@ -174,6 +174,7 @@ class HabanaAttentionImpl(AttentionImpl, torch.nn.Module):
                 qk_matmul_op=self.qk_matmul,
                 softmax_op=self.softmax,
                 kv_matmul_op=self.kv_matmul,
+                valid_sequence_lengths=prefill_meta.seq_lens_tensor
             )
             output = out.reshape(batch_size, seq_len, hidden_size)
         if decode_meta := attn_metadata.decode_metadata:

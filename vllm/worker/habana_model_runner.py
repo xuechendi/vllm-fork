@@ -223,6 +223,7 @@ class HpuModelAdapter():
     def __init__(self, model, block_size):
         self.model = model
         self.block_size = block_size
+        self.prefill_usefusedsdpa = os.getenv('VLLM_PREFILL_USE_FUSESDAPA', '0') == '1'
 
     def _set_attn_bias(self, metadata, batch_size, seq_len, device, dtype):
         seq_lens_t = metadata.seq_lens_tensor
@@ -250,7 +251,8 @@ class HpuModelAdapter():
 
     def _update_metadata(self, attn_metadata, batch_size, seq_len, device, dtype):
         if (meta := attn_metadata.prefill_metadata) is not None:
-            return attn_metadata._replace(prefill_metadata=self._set_attn_bias(meta, batch_size, seq_len, device, dtype))
+            if not self.prefill_usefusedsdpa:
+                return attn_metadata._replace(prefill_metadata=self._set_attn_bias(meta, batch_size, seq_len, device, dtype))
         if (meta := attn_metadata.decode_metadata) is not None:
             return attn_metadata._replace(decode_metadata=self._set_block_mapping(meta, batch_size, device, dtype))
         return attn_metadata
@@ -593,7 +595,6 @@ class HabanaModelRunner:
             multi_modal_input = None
 
         max_prompt_len = max(find_bucket(max(seq_lens), self.prompt_seq_bucket_cfg), self.block_size)
-
         input_tokens = make_tensor_with_pad(input_tokens,
                                             max_prompt_len,
                                             pad=0,
