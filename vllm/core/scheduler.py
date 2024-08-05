@@ -305,7 +305,6 @@ class Scheduler:
         self.artificial_preempt_cnt = (ARTIFICIAL_PREEMPTION_MAX_CNT
                                        if self.enable_artificial_preemption
                                        else 0)
-        #print("libin debug scheduler init done")
 
     @property
     def lora_enabled(self) -> bool:
@@ -318,7 +317,6 @@ class Scheduler:
 
     def add_seq_group(self, seq_group: SequenceGroup) -> None:
         # Add sequence groups to the waiting queue.
-        #print("libin debug add seq group ", seq_group)
         self.waiting.append(seq_group)
 
     def abort_seq_group(self, request_id: Union[str, Iterable[str]]) -> None:
@@ -358,14 +356,10 @@ class Scheduler:
                     self.free_seq(seq)
 
     def has_unfinished_seqs(self) -> bool:
-        re =  len(self.waiting) != 0 or len(self.running) != 0 or len(
+        return len(self.waiting) != 0 or len(self.running) != 0 or len(
             self.swapped) != 0
-        #print("libin debug scheduler has_unfinished_seqs ", re)
-        return re
 
     def get_num_unfinished_seq_groups(self) -> int:
-        #import pdb;pdb.set_trace()
-        #print("libin debug scheduler waiting/running/swaped ", len(self.waiting) , len(self.running) , len(self.swapped))
         return len(self.waiting) + len(self.running) + len(self.swapped)
 
     def _schedule_running(
@@ -413,8 +407,6 @@ class Scheduler:
         now = time.time()
         running_queue = policy.sort_by_priority(now, running_queue)
         i = 1
-        #print("libin debug scheduler runnng")
-        #import pdb;pdb.set_trace()
         while running_queue:
             seq_group = running_queue[0]
             num_running_tokens = self._get_num_new_tokens(
@@ -730,7 +722,6 @@ class Scheduler:
         decodes. If there's a pressure on GPU memory, decode requests can
         be swapped or preempted.
         """
-        #print("libin debug scheduler _schedule_default")
         # Include running requests to the budget.
         budget = SchedulingBudget(
             token_budget=self.scheduler_config.max_num_batched_tokens,
@@ -798,7 +789,6 @@ class Scheduler:
         # doesn't allow chunked prefills.
         assert len(running_scheduled.prefill_seq_groups) == 0
         assert len(swapped_in.prefill_seq_groups) == 0
-        #print("libin debug scheduler _schedule_default done")
         return SchedulerOutputs(
             scheduled_seq_groups=(prefills.seq_groups +
                                   running_scheduled.decode_seq_groups +
@@ -932,9 +922,7 @@ class Scheduler:
         # Schedule sequence groups.
         # This function call changes the internal states of the scheduler
         # such as self.running, self.swapped, and self.waiting.
-        #print("libin debug schedule start")
         scheduler_outputs = self._schedule()
-        #print("libin debug schedule _schedule done")
         now = time.time()
 
         # Create input data structures.
@@ -996,7 +984,7 @@ class Scheduler:
                 if scheduler_outputs.num_prefill_groups > 0 else None,
             )
             seq_group_metadata_list.append(seq_group_metadata)
-        #print("libin debug schedule done with seq group data")
+
         # Now that the batch has been created, we can assume all blocks in the
         # batch will have been computed before the next scheduling invocation.
         # This is because the engine assumes that a failure in model execution
@@ -1004,7 +992,7 @@ class Scheduler:
         for scheduled_seq_group in scheduler_outputs.scheduled_seq_groups:
             self.block_manager.mark_blocks_as_computed(
                 scheduled_seq_group.seq_group)
-        #print("libin debug schedule done")
+
         return seq_group_metadata_list, scheduler_outputs
 
     def fork_seq(self, parent_seq: Sequence, child_seq: Sequence) -> None:

@@ -132,7 +132,7 @@ class LLMEngine:
             model_config.seed,
             model_config.served_model_name,
         )
-        # TODO(woosuk): #print more configs in debug mode.
+        # TODO(woosuk): Print more configs in debug mode.
 
         self.model_config = model_config
         self.cache_config = cache_config
@@ -409,7 +409,6 @@ class LLMEngine:
             >>> # continue the request processing
             >>> ...
         """
-        #print("libin debug llmengine add requst")
         if lora_request is not None and not self.lora_config:
             raise ValueError(f"Got lora_request {lora_request} but LoRA is "
                              "not enabled!")
@@ -427,7 +426,7 @@ class LLMEngine:
             prompt=prompt,
             prompt_token_ids=prompt_token_ids,
             lora_request=lora_request)
-        #print("libin debug llmengine add requst encode done")
+
         # Create the sequences.
         block_size = self.cache_config.block_size
         seq_id = next(self.seq_counter)
@@ -440,7 +439,7 @@ class LLMEngine:
                            "not initialized")
         seq = Sequence(seq_id, prompt, prompt_token_ids, block_size,
                        eos_token_id, lora_request)
-        #print("libin debug llmengine add seq  done")
+
         # Defensive copy of SamplingParams, which are used by the sampler,
         # this doesn't deep-copy LogitsProcessor objects
         sampling_params = sampling_params.clone()
@@ -450,14 +449,13 @@ class LLMEngine:
             sampling_params.all_stop_token_ids.add(seq.eos_token_id)
         sampling_params.update_from_generation_config(
             self.generation_config_fields)
-        #print("libin debug llmengine update_from_generation_config  done")
+
         # Create the sequence group.
         seq_group = SequenceGroup(request_id, [seq], sampling_params,
                                   arrival_time, lora_request, multi_modal_data)
-        #print("libin debug llmengine SequenceGroup  done")
+
         # Add the sequence group to the scheduler.
         self.scheduler.add_seq_group(seq_group)
-        #print("libin debug llmengine add_seq_group  done")
 
     def abort_request(self, request_id: Union[str, Iterable[str]]) -> None:
         """Aborts a request(s) with the given ID.
@@ -492,9 +490,7 @@ class LLMEngine:
 
     def has_unfinished_requests(self) -> bool:
         """Returns True if there are unfinished requests."""
-        re = self.scheduler.has_unfinished_seqs()
-        #print("libin debug has_unfinished_requests ",re)
-        return re
+        return self.scheduler.has_unfinished_seqs()
 
     def _process_model_outputs(
         self,
@@ -596,11 +592,9 @@ class LLMEngine:
             >>>     if not (engine.has_unfinished_requests() or example_inputs):
             >>>         break
         """
-        #print("libin debug llm engine step enter ")
         seq_group_metadata_list, scheduler_outputs = self.scheduler.schedule()
 
         if not scheduler_outputs.is_empty():
-            #print("libin debug llm engine step output not empty ")
             execute_model_req = ExecuteModelRequest(
                 seq_group_metadata_list=seq_group_metadata_list,
                 blocks_to_swap_in=scheduler_outputs.blocks_to_swap_in,
@@ -612,13 +606,12 @@ class LLMEngine:
             output = self.model_executor.execute_model(
                 execute_model_req=execute_model_req)
         else:
-            #print("libin debug llm engine step output  empty ")
             output = []
-        #print("libin debug llm engine step process_model output ")
+
         request_outputs = self._process_model_outputs(
             output, scheduler_outputs.scheduled_seq_groups,
             scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)
-        #print("libin debug llm engine step process_model output done")
+
         # Log stats.
         self.do_log_stats(scheduler_outputs, output)
 
