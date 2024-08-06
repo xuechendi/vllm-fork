@@ -980,7 +980,7 @@ class HabanaModelRunner:
             execute_model_kwargs.update({"bypass_hpu_graphs":not use_graphs})
         htorch.core.mark_step()
         # Sample the next token based on previous logits if any.
-        if self.scheduler_config.enable_delayed_sampling and not is_prompt:
+        if self.scheduler_config.enable_delayed_sampling and not is_prompt and self.is_driver_worker:
             logits_ids_list = []
             logits_tensor = None
             logits_tensor_list = []
@@ -1022,7 +1022,7 @@ class HabanaModelRunner:
         with self.profiler.record_event('internal', model_event_name):
             hidden_states = self.model.forward(**execute_model_kwargs, selected_token_indices=sampling_metadata.selected_token_indices)
 
-        if self.scheduler_config.enable_delayed_sampling:
+        if self.scheduler_config.enable_delayed_sampling and self.is_driver_worker:
             if not is_prompt:
                 htorch.core.mark_step()
                 # Only after dispatching next model.forward() read and update the previous token ids to return
@@ -1035,14 +1035,15 @@ class HabanaModelRunner:
                 # For prompts compose empty output
                 from vllm.sequence import (Logprob, SamplerOutput, SequenceGroupOutput, SequenceOutput)
                 sampler_output = []
-                for seq_group in sampling_metadata.seq_groups:
-                    seq_ids = seq_group.seq_ids
-                    next_token_id, parent_id = -1, 0
-                    seq_outputs = []
-                    seq_outputs.append(
-                        SequenceOutput(seq_ids[parent_id], next_token_id, {-1: Logprob(0.0)}))
-                    sampler_output.append(
-                        SequenceGroupOutput(seq_outputs, None))
+                if sampling_metadata.seq_groups is not None:
+                    for seq_group in sampling_metadata.seq_groups:
+                        seq_ids = seq_group.seq_ids
+                        next_token_id, parent_id = -1, 0
+                        seq_outputs = []
+                        seq_outputs.append(
+                            SequenceOutput(seq_ids[parent_id], next_token_id, {-1: Logprob(0.0)}))
+                        sampler_output.append(
+                            SequenceGroupOutput(seq_outputs, None))
 
                 sampled_token_probs, logprobs_tensor, sampled_token_ids = (None, None, None)
                 output = SamplerOutput(
@@ -1060,7 +1061,7 @@ class HabanaModelRunner:
             sampling_metadata.selected_token_indices = None
             logits = self.model.compute_logits(hidden_states, sampling_metadata)
 
-        if self.scheduler_config.enable_delayed_sampling:
+        if self.scheduler_config.enable_delayed_sampling and self.is_driver_worker:
             for idx, seq_group_metadata in enumerate(seq_group_metadata_list):
                 assert len(seq_group_metadata.seq_data) == 1
                 for seq_data in seq_group_metadata.seq_data.values():
@@ -1135,13 +1136,17 @@ class HabanaModelRunner:
         scenario_name = f"warmup_{'prompt' if is_prompt else 'decode'}_bs{batch_size}_seq{seq_len}_graphs{'T' if use_graphs else 'F'}"
         self.profiler.start('internal', scenario_name)
         times = 3 if use_graphs or profile else 1
-        if is_prompt:
-            seqs = [self.create_dummy_seq_group_metadata(i, seq_len, is_prompt) for i in range(batch_size)]
-        else:
-            # FIXME: seq_len is actually number of blocks
-            blocks = [seq_len // batch_size for _ in range(batch_size)]
-            blocks[0] += seq_len % batch_size
-            seqs = [self.create_dummy_seq_group_metadata(i, b * self.block_size - 1, is_prompt) for i, b in enumerate(blocks)]
+        seqs = [
+            self.create_dummy_seq_group_metadata(i, seq_len, is_prompt)
+            for i in range(batch_size)
+        ]
+        # if is_prompt:
+        #     seqs = [self.create_dummy_seq_group_metadata(i, seq_len, is_prompt) for i in range(batch_size)]
+        # else:
+        #     # FIXME: seq_len is actually number of blocks
+        #     blocks = [seq_len // batch_size for _ in range(batch_size)]
+        #     blocks[0] += seq_len % batch_size
+        #     seqs = [self.create_dummy_seq_group_metadata(i, b * self.block_size - 1, is_prompt) for i, b in enumerate(blocks)]
         torch.hpu.synchronize()
         profiler = None
         if profile and self.is_driver_worker:

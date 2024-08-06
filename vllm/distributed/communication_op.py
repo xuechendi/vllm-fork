@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 from torch.distributed import ProcessGroup
 from vllm.utils import is_hpu
+if is_hpu():
+    import habana_frameworks.torch as htorch
 
 from .parallel_state import (get_cpu_world_group,
                              get_tensor_model_parallel_group,
@@ -37,6 +39,8 @@ def tensor_model_parallel_all_reduce(input_: torch.Tensor) -> torch.Tensor:
     if is_pynccl_enabled_for_all_reduce():
         pynccl_utils.all_reduce(input_)
     else:
+        if is_hpu():
+            htorch.core.mark_step()
         torch.distributed.all_reduce(input_,
                                      group=get_tensor_model_parallel_group())
     return input_
