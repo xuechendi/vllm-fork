@@ -37,6 +37,9 @@ def tensor_model_parallel_all_reduce(input_: torch.Tensor) -> torch.Tensor:
     if is_pynccl_enabled_for_all_reduce():
         pynccl_utils.all_reduce(input_)
     else:
+        if is_hpu():
+            import habana_frameworks.torch as htorch
+            htorch.core.mark_step()
         torch.distributed.all_reduce(input_,
                                      group=get_tensor_model_parallel_group())
     return input_

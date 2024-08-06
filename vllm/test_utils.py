@@ -17,7 +17,8 @@ def init_test_distributed_environment(
         world_size=pipeline_parallel_size * tensor_parallel_size,
         rank=rank,
         distributed_init_method=distributed_init_method,
-        local_rank=local_rank)
+        local_rank=local_rank, 
+        backend='hccl')
     ensure_model_parallel_initialized(tensor_parallel_size,
                                       pipeline_parallel_size)
 
@@ -29,7 +30,6 @@ def multi_process_tensor_parallel(
     # Using ray helps debugging the error when it failed
     # as compared to multiprocessing.
     ray.init()
-
     distributed_init_port = get_open_port()
     refs = []
     for rank in range(tensor_parallel_size):

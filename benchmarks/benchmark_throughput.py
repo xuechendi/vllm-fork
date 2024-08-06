@@ -104,7 +104,7 @@ def run_vllm(
         max_num_seqs=128,
         num_lookahead_slots=1,
         use_v2_block_manager=True,
-        enable_delayed_sampling=True,
+        #enable_delayed_sampling=True,
     )
 
     # Add the requests to the engine.
@@ -242,10 +242,16 @@ def main(args: argparse.Namespace):
                                args.output_len)
     else:
         raise ValueError(f"Unknown backend: {args.backend}")
+    total_input_num_tokens = sum(prompt_len
+                           for _, prompt_len, output_len in requests)
+    total_output_num_tokens = sum(output_len
+                           for _, prompt_len, output_len in requests)
     total_num_tokens = sum(prompt_len + output_len
                            for _, prompt_len, output_len in requests)
     print(f"Throughput: {len(requests) / elapsed_time:.2f} requests/s, "
-          f"{total_num_tokens / elapsed_time:.2f} tokens/s")
+          f"Overall {total_num_tokens / elapsed_time:.2f} tokens/s"
+          f"Input {total_input_num_tokens / elapsed_time:.2f} tokens/s"
+          f"OUtput {total_output_num_tokens / elapsed_time:.2f} tokens/s")
 
 
 if __name__ == "__main__":
