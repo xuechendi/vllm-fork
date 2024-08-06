@@ -30,7 +30,11 @@ def main(args: argparse.Namespace):
               ray_workers_use_nsight=args.ray_workers_use_nsight,
               enable_chunked_prefill=args.enable_chunked_prefill,
               download_dir=args.download_dir,
-              block_size=args.block_size)
+              block_size=args.block_size, # set to 128
+              max_num_seqs=128,
+              num_lookahead_slots=1,
+              use_v2_block_manager=True,
+              enable_delayed_sampling=True,)
 
     sampling_params = SamplingParams(
         n=args.n,
