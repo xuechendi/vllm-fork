@@ -157,12 +157,14 @@ def warmup_range(config: Tuple[int, int, int]):
     ramp_up = itertools.accumulate(base, func=operator.mul, initial=bmin)
     ramp_up = itertools.takewhile(lambda x: x < bstep and x <= bmax, ramp_up)
     stable = range(max(bmin, bstep), bmax + 1, bstep)
-    print("To warm up range for ramp_up is ", list(ramp_up), ", for stable is ", list(stable))
     return list(ramp_up) + list(stable)
 
 
 def generate_prompt_buckets(bs_bucket_config, seq_bucket_config):
-    buckets = itertools.product(warmup_range(bs_bucket_config), warmup_range(seq_bucket_config))
+    bs_bucket = warmup_range(bs_bucket_config)
+    seq_bucket = warmup_range(seq_bucket_config)
+    print(f"generate_prompt_buckets, bs_bucket: {bs_bucket}, seq_bucket: {seq_bucket}")
+    buckets = itertools.product(bs_bucket, seq_bucket)
     return list(sorted(buckets, key=lambda b: (b[0] * b[1], b[1], b[0])))
 
 
@@ -956,6 +958,7 @@ class HabanaModelRunner:
         seq_group_metadata_list: Optional[List[SequenceGroupMetadata]],
         kv_caches: List[torch.Tensor],
         warmup_mode=False,
+        use_graphs=None,
     ) -> Optional[SamplerOutput]:
         if self.is_driver_worker:
             event_start = self.profiler.get_timestamp_us()
@@ -980,7 +983,7 @@ class HabanaModelRunner:
 
         batch_size = input_tokens.size(0)
         seq_len = self._seq_len(attn_metadata)
-        use_graphs = self._use_graphs(batch_size, seq_len, is_prompt)
+        use_graphs = self._use_graphs(batch_size, seq_len, is_prompt) if use_graphs is None else use_graphs
         self._check_config(batch_size, seq_len, is_prompt, warmup_mode)
         execute_model_kwargs = {
             "input_ids": input_tokens,
@@ -1034,8 +1037,8 @@ class HabanaModelRunner:
         else:
             model_event_name = 'model_executable'
         with self.profiler.record_event('internal', model_event_name):
-            print("input_ids shape is ", execute_model_kwargs["input_ids"].shape, ", used memory is ", execute_model_kwargs["input_ids"].element_size() * execute_model_kwargs["input_ids"].numel() / 1024 / 1024, "MB")
-            print("positions shape is ", execute_model_kwargs["positions"].shape, ", used memory is ", execute_model_kwargs["positions"].element_size() * execute_model_kwargs["positions"].numel() / 1024 / 1024, "MB")
+            #print("input_ids shape is ", f"{(batch_size, seq_len, is_prompt)}", execute_model_kwargs["input_ids"].shape, ", used memory is ", execute_model_kwargs["input_ids"].element_size() * execute_model_kwargs["input_ids"].numel() / 1024 / 1024, "MB")
+            #print("positions shape is ", f"{(batch_size, seq_len, is_prompt)}", execute_model_kwargs["positions"].shape, ", used memory is ", execute_model_kwargs["positions"].element_size() * execute_model_kwargs["positions"].numel() / 1024 / 1024, "MB")
             hidden_states = self.model.forward(**execute_model_kwargs, selected_token_indices=sampling_metadata.selected_token_indices)
 
         if self.scheduler_config.enable_delayed_sampling:
@@ -1147,10 +1150,10 @@ class HabanaModelRunner:
         max_batch_size = self.prompt_bs_bucket_cfg[-1]
         max_seq_len = self.prompt_seq_bucket_cfg[-1]
 
-        self.warmup_scenario(max_batch_size, max_seq_len, True, kv_caches)
+        self.warmup_scenario(max_batch_size, max_seq_len, True, kv_caches, use_graphs=False)
 
-    def warmup_scenario(self, batch_size, seq_len, is_prompt, kv_caches, profile = False) -> None:
-        use_graphs = self._use_graphs(batch_size, seq_len, is_prompt)
+    def warmup_scenario(self, batch_size, seq_len, is_prompt, kv_caches, profile = False, use_graphs = None) -> None:
+        use_graphs = self._use_graphs(batch_size, seq_len, is_prompt) if use_graphs is None else use_graphs
         scenario_name = f"warmup_{'prompt' if is_prompt else 'decode'}_bs{batch_size}_seq{seq_len}_graphs{'T' if use_graphs else 'F'}"
         self.profiler.start('internal', scenario_name)
         times = 3 if use_graphs or profile else 1
@@ -1168,7 +1171,7 @@ class HabanaModelRunner:
             profiler.start()
         self.profiler.start('internal', scenario_name)
         for _ in range(times):
-            self.execute_model(seqs, kv_caches, warmup_mode=True)
+            self.execute_model(seqs, kv_caches, warmup_mode=True, use_graphs=use_graphs)
             torch.hpu.synchronize()
             if profiler:
                 profiler.step()

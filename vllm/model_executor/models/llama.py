@@ -285,10 +285,10 @@ class LlamaModel(nn.Module):
             hidden_states = inputs_embeds
         else:
             hidden_states = self.get_input_embeddings(input_ids)
+            if is_hpu():
+                import habana_frameworks.torch as htorch
+                htorch.core.mark_step()
         residual = None
-        if is_hpu():
-            import habana_frameworks.torch as htorch
-            htorch.core.mark_step()
         for i in range(len(self.layers)):
             layer = self.layers[i]
             hidden_states, residual = layer(
