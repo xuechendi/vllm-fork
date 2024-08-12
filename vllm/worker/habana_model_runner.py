@@ -1041,14 +1041,14 @@ class HabanaModelRunner:
         if input_ids is not None:
             execute_model_kwargs["input_ids"] = input_ids
             htorch.core.mark_step()
+        else:
+            execute_model_kwargs["input_ids"] = execute_model_kwargs["input_ids"].clone()
 
         if self.is_driver_worker:
             model_event_name = f"model_{'prompt' if is_prompt else 'decode'}_bs{batch_size}_seq{seq_len}_graphs{'T' if use_graphs else 'F'}"
         else:
             model_event_name = 'model_executable'
         with self.profiler.record_event('internal', model_event_name):
-            #print("input_ids shape is ", f"{(batch_size, seq_len, is_prompt)}", execute_model_kwargs["input_ids"].shape, ", used memory is ", execute_model_kwargs["input_ids"].element_size() * execute_model_kwargs["input_ids"].numel() / 1024 / 1024, "MB")
-            #print("positions shape is ", f"{(batch_size, seq_len, is_prompt)}", execute_model_kwargs["positions"].shape, ", used memory is ", execute_model_kwargs["positions"].element_size() * execute_model_kwargs["positions"].numel() / 1024 / 1024, "MB")
             hidden_states = self.model.forward(**execute_model_kwargs, selected_token_indices=sampling_metadata.selected_token_indices)
 
         if self.scheduler_config.enable_delayed_sampling and self.is_driver_worker:
