@@ -100,6 +100,11 @@ def run_vllm(
         download_dir=download_dir,
         enable_chunked_prefill=enable_chunked_prefill,
         max_num_batched_tokens=max_num_batched_tokens,
+        block_size=128,
+        max_num_seqs=128,
+        num_lookahead_slots=1,
+        use_v2_block_manager=True,
+        enable_delayed_sampling=True,
     )
 
     # Add the requests to the engine.
@@ -109,10 +114,11 @@ def run_vllm(
         prompts.append(prompt)
         sampling_params.append(
             SamplingParams(
-                n=n,
-                temperature=0.0 if use_beam_search else 1.0,
-                top_p=1.0,
-                use_beam_search=use_beam_search,
+                # n=n,
+                # temperature=0.0 if use_beam_search else 1.0,
+                # top_p=1.0,
+                # use_beam_search=use_beam_search,
+                temperature=0.0,
                 ignore_eos=True,
                 max_tokens=output_len,
             ))
