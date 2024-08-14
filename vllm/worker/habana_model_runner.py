@@ -1134,7 +1134,7 @@ class HabanaModelRunner:
         use_graphs = self._use_graphs(batch_size, seq_len, is_prompt)
         scenario_name = f"warmup_{'prompt' if is_prompt else 'decode'}_bs{batch_size}_seq{seq_len}_graphs{'T' if use_graphs else 'F'}"
         self.profiler.start('internal', scenario_name)
-        times = 3 if use_graphs or profile else 1
+        times = 1 if use_graphs or profile else 1
         if is_prompt:
             seqs = [self.create_dummy_seq_group_metadata(i, seq_len, is_prompt) for i in range(batch_size)]
         else:
@@ -1227,8 +1227,8 @@ class HabanaModelRunner:
 
         start_mem = HabanaMemoryProfiler.current_device_memory_usage()
         start_time = time.perf_counter()
-        self.warmup_all_buckets(self.prompt_buckets, True, kv_caches)
-        self.warmup_all_buckets(self.decode_buckets, False, kv_caches)
+        # self.warmup_all_buckets(self.prompt_buckets, True, kv_caches)
+        # self.warmup_all_buckets(self.decode_buckets, False, kv_caches)
 
         if not self.enforce_eager:
             mem_margin = 1.0 - float(os.environ.get('VLLM_GRAPH_MEM_MARGIN', '0.02'))
