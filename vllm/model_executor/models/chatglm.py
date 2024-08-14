@@ -27,6 +27,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.sequence import SamplerOutput
 from vllm.transformers_utils.configs import ChatGLMConfig
+from vllm.utils import is_hpu
 
 
 class GLMAttention(nn.Module):
@@ -262,6 +263,9 @@ class GLMTransformer(nn.Module):
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
     ) -> torch.Tensor:
+        if is_hpu():
+            import habana_frameworks.torch as htorch
+            htorch.core.mark_step()
         for i in range(self.num_layers):
             layer = self.layers[i]
             hidden_states = layer(
@@ -270,6 +274,8 @@ class GLMTransformer(nn.Module):
                 kv_cache=kv_caches[i],
                 attn_metadata=attn_metadata,
             )
+            if is_hpu():
+                htorch.core.mark_step()
         # Final layer norm.
         if self.post_layer_norm:
             hidden_states = self.final_layernorm(hidden_states)
