@@ -166,6 +166,10 @@ class BatchExpansionTop1Scorer(SpeculativeScorer):
         # non-speculative sequences.
         non_spec_expanded_bs, _ = non_spec_target_token_ids.shape
         spec_expanded_bs = expanded_batch_size - non_spec_expanded_bs
+       
+        # TODO: FIXME: This is a hack to handle the fact that the batch size 
+        if spec_expanded_bs < 0:
+            spec_expanded_bs = -spec_expanded_bs
 
         target_token_ids = target_token_ids.reshape(spec_expanded_bs, k + 1)
         target_probs = target_probs.reshape(*target_token_ids.shape,
