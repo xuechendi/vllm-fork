@@ -45,6 +45,15 @@ class SpecDecodeBaseSampler(nn.Module):
         self.num_emitted_tokens = torch.tensor(0,
                                                dtype=torch.long,
                                                device=device)
+        
+    def init_tensors(self, rank: int, device: str) -> None:
+        assert self.num_accepted_tokens is None
+        self.num_accepted_tokens = torch.tensor(0,
+                                                dtype=torch.long,
+                                                device=device)
+        self.num_emitted_tokens = torch.tensor(0,
+                                               dtype=torch.long,
+                                               device=device)
 
     @property
     def probs_dtype(self):
@@ -80,7 +89,8 @@ class SpecDecodeBaseSampler(nn.Module):
             tensor is [batch_size, k + num_bonus_tokens]
         """
         batch_size, k = substitute_token_ids.shape
-        bonus_token_ids = bonus_token_ids.squeeze()
+        if bonus_token_ids.dim() == 2:
+            bonus_token_ids = bonus_token_ids.squeeze(1)
         # Determine the index of the first False value for each row.
         limits = (accepted == 0).max(1).indices
         limits[~(accepted == 0).any(1)] = k

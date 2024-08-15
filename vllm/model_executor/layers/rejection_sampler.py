@@ -85,7 +85,6 @@ class RejectionSampler(SpecDecodeStochasticBaseSampler):
                 draft_token_ids,
                 generators,
             ))
-
         output_token_ids = self._create_output(
             accepted,
             recovered_token_ids,

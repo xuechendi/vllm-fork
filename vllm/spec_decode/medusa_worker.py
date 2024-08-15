@@ -10,9 +10,10 @@ from vllm.spec_decode.interfaces import SpeculativeProposals
 from vllm.spec_decode.proposer_worker_base import NonLLMProposerWorkerBase
 from vllm.spec_decode.top1_proposer import Top1Proposer
 from vllm.worker.worker import Worker
+from vllm.worker.habana_worker import HabanaWorker
 
 
-class MedusaWorker(NonLLMProposerWorkerBase, Worker):
+class MedusaWorker(NonLLMProposerWorkerBase, HabanaWorker):
     """Worker for Medusa.
     """
 
@@ -33,7 +34,7 @@ class MedusaWorker(NonLLMProposerWorkerBase, Worker):
         )
 
     def set_include_gpu_probs_tensor(self):
-        pass
+        self.model_runner.model.sampler.include_gpu_probs_tensor = True
 
     @torch.inference_mode()
     def sampler_output(

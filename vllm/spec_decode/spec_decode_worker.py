@@ -32,6 +32,7 @@ from vllm.spec_decode.util import (create_sequence_group_output,
                                    get_sampled_token_logprobs, nvtx_range,
                                    split_batch_by_proposal_len)
 from vllm.worker.worker import Worker
+from vllm.worker.habana_worker import HabanaWorker
 from vllm.worker.worker_base import LoraNotSupportedWorkerBase, WorkerBase
 
 logger = init_logger(__name__)
@@ -48,7 +49,8 @@ def create_spec_worker(*args, **kwargs) -> "SpecDecodeWorker":
     draft_worker_kwargs = kwargs.copy()
 
     kwargs["model_runner_cls"] = TargetModelRunner
-    target_worker = Worker(*args, **kwargs)
+    #target_worker = Worker(*args, **kwargs)
+    target_worker = HabanaWorker(*args, **kwargs)
     # Set the disable_logprobs variable in the TargetModelRunner instance
     # as per its value specified in the SpeculativeConfig.
     target_worker.model_runner.disable_logprobs =\
@@ -150,8 +152,9 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
             proposer_worker = SmallerTpProposerWorker.maybe_wrap_worker(
                 proposer_worker, draft_tp, target_tp)
 
-        logger.info("Configuring SpecDecodeWorker with proposer=%s",
-                    type(proposer_worker))
+        print("****************************************************")
+        logger.info(f"Configuring SpecDecodeWorker with proposer={type(proposer_worker)}, scorer={type(scorer_worker)}")
+        print("****************************************************")
 
         spec_decode_sampler: SpecDecodeBaseSampler = None
         if draft_token_acceptance_method == "rejection_sampler":
@@ -216,9 +219,9 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
         self.disable_by_batch_size = disable_by_batch_size or float("inf")
         self.spec_decode_sampler = spec_decode_sampler
         self._allow_zero_draft_token_step = allow_zero_draft_token_step
-        self._metrics = AsyncMetricsCollector(
-            self.spec_decode_sampler
-        ) if metrics_collector is None else metrics_collector
+        # self._metrics = AsyncMetricsCollector(
+        #     self.spec_decode_sampler
+        # ) if metrics_collector is None else metrics_collector
         # Tracks the sequence IDs that received a bonus token ID in
         # their last forward pass. Needed only if KV cache is being
         # used for token generation such as in the case of MultiStepWorker.
@@ -250,8 +253,8 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
         self.scorer_worker.load_model()
         self.proposer_worker.load_model()
 
-        self._metrics.init_gpu_tensors(self.rank)
-        self.spec_decode_sampler.init_gpu_tensors(self.rank)
+        #self._metrics.init_tensors(self.rank, device=self.device)
+        self.spec_decode_sampler.init_tensors(self.rank, device=self.device)
 
         self.scorer = BatchExpansionTop1Scorer(
             scorer_worker=self.scorer_worker,
@@ -263,6 +266,10 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
     def load_model(self, *args, **kwargs):
         pass
 
+    def shutdown_inc(self):
+        self.proposer_worker.shutdown_inc()
+        self.scorer_worker.shutdown_inc()
+        
     def _configure_model_sampler_for_spec_decode(self):
         """Configure model sampler to emit GPU tensors. This allows spec decode
         to keep data on device without transferring to CPU and serializing,
@@ -441,7 +448,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
                 ))
         return SamplerOutput(outputs=completion_seq_group_output_list)
 
-    @nvtx_range("spec_decode_worker._run_no_spec")
+    #@nvtx_range("spec_decode_worker._run_no_spec")
     def _run_no_spec(self, execute_model_req: ExecuteModelRequest,
                      skip_proposer: bool) -> List[SamplerOutput]:
         """Run a single generation step without any speculation. The input is
@@ -504,7 +511,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
         self.scorer_worker.execute_model()
         return True
 
-    @nvtx_range("spec_decode_worker._run_speculative_decoding_step")
+    #@nvtx_range("spec_decode_worker._run_speculative_decoding_step")
     def _run_speculative_decoding_step(
             self, execute_model_req: ExecuteModelRequest,
             num_lookahead_slots: int) -> List[SamplerOutput]:
@@ -545,7 +552,7 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
             target_logprobs=target_logprobs,
             k=execute_model_req.num_lookahead_slots)
 
-    @nvtx_range("spec_decode_worker._verify_tokens")
+    #@nvtx_range("spec_decode_worker._verify_tokens")
     def _verify_tokens(
         self,
         seq_group_metadata_list: List[SequenceGroupMetadata],
@@ -720,11 +727,11 @@ class SpecDecodeWorker(LoraNotSupportedWorkerBase):
         self._track_sequences_with_bonus_tokens(seq_ids,
                                                 request_ids_seq_ids_mapping,
                                                 accepted_token_ids_by_step)
-        maybe_rejsample_metrics = (
-            self._metrics.maybe_collect_rejsample_metrics(k))
-        if maybe_rejsample_metrics is not None:
-            sampler_output_list[
-                0].spec_decode_worker_metrics = maybe_rejsample_metrics
+        # maybe_rejsample_metrics = (
+        #     self._metrics.maybe_collect_rejsample_metrics(k))
+        # if maybe_rejsample_metrics is not None:
+        #     sampler_output_list[
+        #         0].spec_decode_worker_metrics = maybe_rejsample_metrics
         return sampler_output_list
 
     def _create_dummy_logprob_lists(

@@ -4,7 +4,7 @@
 
 import gc
 import os
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple, Type
 
 import habana_frameworks.torch as htorch  # noqa:F401
 import torch
@@ -25,6 +25,7 @@ from vllm.utils import HabanaMemoryProfiler, format_bytes
 from vllm.worker.cache_engine import CacheEngine
 from vllm.worker.habana_model_runner import HabanaModelRunner
 from vllm.worker.worker_base import LocalOrDistributedWorkerBase, WorkerInput
+from vllm.worker.model_runner_base import ModelRunnerBase
 
 logger = init_logger(__name__)
 
@@ -52,6 +53,7 @@ class HabanaWorker(LocalOrDistributedWorkerBase):
         multimodal_config: Optional[MultiModalConfig] = None,
         speculative_config: Optional[SpeculativeConfig] = None,
         prompt_adapter_config: Optional[PromptAdapterConfig] = None,
+        model_runner_cls: Optional[Type[ModelRunnerBase]] = None,
         is_driver_worker: bool = False,
     ) -> None:
         self.model_config = model_config

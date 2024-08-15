@@ -7,6 +7,7 @@ import torch
 from vllm.model_executor.layers.spec_decode_base_sampler import (
     SpecDecodeBaseSampler)
 from vllm.utils import is_pin_memory_available
+import habana_frameworks.torch as ht
 
 
 @dataclass
@@ -78,6 +79,13 @@ class AsyncMetricsCollector:
     def init_gpu_tensors(self, rank: int) -> None:
         self._rank = rank
         self._copy_stream = torch.cuda.Stream()
+
+    def init_tensors(self, rank: int, device: str) -> None:
+        self._rank = rank
+        if 'hpu' == device.type:
+            self._copy_stream = ht.hpu.Stream()
+        else:
+            self._copy_stream = torch.cuda.Stream()
 
     def maybe_collect_rejsample_metrics(
             self, k: int) -> Optional[SpecDecodeWorkerMetrics]:

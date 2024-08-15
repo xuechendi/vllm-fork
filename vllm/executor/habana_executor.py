@@ -48,16 +48,23 @@ class HabanaExecutor(ExecutorBase):
             lora_config=self.lora_config,
             multimodal_config=self.multimodal_config,
             is_driver_worker=rank == 0,
+            speculative_config=self.speculative_config,
         )
 
     def _create_worker(self,
                        local_rank: int = 0,
                        rank: int = 0,
                        distributed_init_method: Optional[str] = None):
-        wrapper = WorkerWrapperBase(
-            worker_module_name="vllm.worker.habana_worker",
-            worker_class_name="HabanaWorker",
-        )
+        if self.speculative_config is None:
+            wrapper = WorkerWrapperBase(
+                worker_module_name="vllm.worker.habana_worker",
+                worker_class_name="HabanaWorker",
+            )
+        else:
+            wrapper = WorkerWrapperBase(
+                worker_module_name="vllm.spec_decode.spec_decode_worker",
+                worker_class_name="create_spec_worker",
+            )
         wrapper.init_worker(**self._get_worker_kwargs(local_rank, rank,
                                                       distributed_init_method))
         return wrapper.worker

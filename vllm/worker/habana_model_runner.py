@@ -201,6 +201,10 @@ class HpuModelAdapter():
     def sample(self, *args, **kwargs):
         return self.model.sample(*args, **kwargs)
 
+    @property
+    def sampler(self):
+        return self.model.sampler
+
 
 class PreparePromptMetadata(NamedTuple):
     input_tokens: torch.Tensor
@@ -1493,7 +1497,6 @@ class HabanaModelRunner(
         return [output]
 
     def shutdown_inc(self):
-        print('inc shutdown')
         if (model_config := getattr(self, "model_config", None)) and \
                          getattr(model_config, "quantization", None) == 'inc':
             print('inc shutdown start')
