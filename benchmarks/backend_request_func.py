@@ -24,6 +24,7 @@ class RequestFuncInput:
     model: str
     best_of: int = 1
     use_beam_search: bool = False
+    image_url: str = None
 
 
 @dataclass
@@ -309,12 +310,19 @@ async def async_request_openai_chat_completions(
 
     async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         assert not request_func_input.use_beam_search
+        if request_func_input.image_url:
+            prompt = [
+                {"type": "text", "text": request_func_input.prompt},
+                {"type": "image_url", "image_url": {"url": request_func_input.image_url}}
+            ]
+        else:
+            prompt = request_func_input.prompt
         payload = {
             "model": request_func_input.model,
             "messages": [
                 {
                     "role": "user",
-                    "content": request_func_input.prompt,
+                    "content": prompt,
                 },
             ],
             "temperature": 0.0,

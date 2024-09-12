@@ -31,7 +31,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from backend_request_func import (ASYNC_REQUEST_FUNCS, RequestFuncInput,
@@ -212,6 +212,35 @@ def sample_random_requests(
     return input_requests
 
 
+def sample_llavabench_requests(
+    dataset_path: str,
+    num_requests: int,
+    tokenizer: PreTrainedTokenizerBase,
+    fixed_output_len: Optional[int] = None,
+) -> List[Tuple[Tuple[str, str], int, int]]:
+    def encode_image(img):
+        import base64
+        from io import BytesIO
+
+        im_file = BytesIO()
+        img.save(im_file, format="JPEG")
+        im_bytes = im_file.getvalue()  # im_bytes: image in binary format.
+        return base64.b64encode(im_bytes)
+
+    from datasets import load_dataset, Image
+    ds = load_dataset("liuhaotian/llava-bench-in-the-wild", split="train")
+    ds = ds.cast_column("image", Image(mode="RGB"))
+    ret = []
+    total_req = 0
+    for i in ds:
+        total_req += 1
+        prompt = "What's in this image?"
+        prompt_token_ids = tokenizer(prompt).input_ids
+        ret += [(("What's in this image?", encode_image(i["image"])), len(prompt_token_ids), fixed_output_len)]
+        if total_req >= num_requests:
+            break
+    return ret
+
 async def get_request(
     input_requests: List[Tuple[str, int, int]],
     request_rate: float,
@@ -297,7 +326,7 @@ async def benchmark(
     api_url: str,
     model_id: str,
     tokenizer: PreTrainedTokenizerBase,
-    input_requests: List[Tuple[str, int, int]],
+    input_requests: List[Tuple[Union[str, tuple[str, str]], int, int]],
     best_of: int,
     use_beam_search: bool,
     request_rate: float,
@@ -310,6 +339,12 @@ async def benchmark(
 
     print("Starting initial single prompt test run...")
     test_prompt, test_prompt_len, test_output_len = input_requests[0]
+    if isinstance(test_prompt, tuple):
+        test_prompt = test_prompt[0]
+        image_url = test_prompt[1]
+    else:
+        image_url = None
+
     test_input = RequestFuncInput(
         model=model_id,
         prompt=test_prompt,
@@ -318,6 +353,7 @@ async def benchmark(
         output_len=test_output_len,
         best_of=best_of,
         use_beam_search=use_beam_search,
+        image_url=image_url,
     )
     test_output = await request_func(request_func_input=test_input)
     if not test_output.success:
@@ -498,7 +534,15 @@ def main(args: argparse.Namespace):
             range_ratio=args.random_range_ratio,
             tokenizer=tokenizer,
         )
-
+        
+    elif args.dataset_name == "llavabench":
+        input_requests = sample_llavabench_requests(
+            dataset_path=args.dataset_path,
+            num_requests=args.num_prompts,
+            tokenizer=tokenizer,
+            fixed_output_len=128,
+        )
+        
     else:
         raise ValueError(f"Unknown dataset: {args.dataset_name}")
 
@@ -592,7 +636,7 @@ if __name__ == "__main__":
         "--dataset-name",
         type=str,
         default="sharegpt",
-        choices=["sharegpt", "sonnet", "random"],
+        choices=["sharegpt", "sonnet", "random", "llavabench"],
         help="Name of the dataset to benchmark on.",
     )
     parser.add_argument("--dataset-path",
