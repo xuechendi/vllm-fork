@@ -1070,6 +1070,7 @@ class MllamaForConditionalGeneration(nn.Module, SupportsMultiModal):
             raise ValueError("Chunk prefill not supported")
         image_inputs = self._parse_and_validate_image_input(**kwargs)
         if image_inputs is None:
+            print(">>>>>>>>>>>>>>Next Token!!!!!")
             cross_attention_mask = None
             full_text_row_masked_out_mask = (
                 attn_metadata.encoder_seq_lens_tensor != 0).reshape(-1, 1).to(
@@ -1078,6 +1079,7 @@ class MllamaForConditionalGeneration(nn.Module, SupportsMultiModal):
             skip_cross_attention = max(attn_metadata.encoder_seq_lens) == 0
         else:
             # NOTE: llama's reference implementation runs vision model on CPU
+            print(">>>>>>>>>>>>>>First Token!!!!!")
             pixel_values = image_inputs['data']
             aspect_ratio_ids = image_inputs['aspect_ratio_ids']
             aspect_ratio_mask = image_inputs['aspect_ratio_mask']

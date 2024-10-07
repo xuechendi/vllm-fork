@@ -68,6 +68,8 @@ class HPUAttentionMetadata(HPUPagedAttentionMetadata, AttentionMetadata):
     is_prompt: bool
     attn_bias: Optional[torch.Tensor]
     seq_lens_tensor: Optional[torch.Tensor]
+    encoder_seq_lens: Optional[List[int]] = None
+    encoder_seq_lens_tensor: Optional[torch.Tensor] = None
 
 
 class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
@@ -154,6 +156,7 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             shape = [num_tokens, num_heads * head_size]
         """
         if attn_type != AttentionType.DECODER:
+            print("attn_type is", attn_type)
             raise NotImplementedError("Encoder self-attention and "
                                       "encoder/decoder cross-attention "
                                       "are not implemented for "

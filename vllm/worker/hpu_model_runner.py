@@ -509,6 +509,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         prompt_adapter_config: Optional[PromptAdapterConfig] = None,
         return_hidden_states: bool = False,
         observability_config: Optional[ObservabilityConfig] = None,
+        is_encoder_decoder_model: bool = False
     ):
         self.model_config = model_config
         self.parallel_config = parallel_config
@@ -521,6 +522,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self.prompt_adapter_config = prompt_adapter_config
         self.return_hidden_states = return_hidden_states
         self.observability_config = observability_config
+        self.is_encoder_decoder_model = is_encoder_decoder_model
         self.profiler = HabanaHighLevelProfiler()
 
         self.sliding_window = (model_config.get_sliding_window()
@@ -550,6 +552,12 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             self.kv_cache_dtype,
             self.block_size,
         )
+
+        # Multi-modal data support
+        self.mm_registry = MULTIMODAL_REGISTRY
+        self.multi_modal_input_mapper = self.mm_registry \
+            .create_input_mapper(self.model_config)
+        self.mm_registry.init_mm_limits_per_prompt(self.model_config)
 
         # Lazy initialization
         self.lora_manager: LRUCacheWorkerLoRAManager = None
@@ -1031,9 +1039,49 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                                      slot_mapping=slot_mapping,
                                      lora_ids=lora_ids)
 
+    def _prepare_encoder_model_input_tensors(self, seq_group_metadata_list):
+        def _list_to_int32_tensor(
+            _list: List[int],
+            device,
+        ) -> torch.Tensor:
+            return torch.tensor(_list, dtype=torch.int32, device=device)
+
+
+        if len(seq_group_metadata_list) == 0:
+            return None, None
+
+        # Since we are not supporting chunked prefill either the entire
+        # batch is prefill or it is decode
+        is_prompt = seq_group_metadata_list[0].is_prompt
+        # Build encoder inputs
+        encoder_seq_lens: List[int] = []
+        if is_prompt:
+            for seq_group_metadata in seq_group_metadata_list:
+                # Build seq lens
+                seq_len = seq_group_metadata.encoder_seq_data.get_len() if seq_group_metadata.encoder_seq_data else 0
+                encoder_seq_lens.append(seq_len)
+        else:
+            for seq_group_metadata in seq_group_metadata_list:
+                for _ in range(len(seq_group_metadata.seq_data)):
+                    seq_len = seq_group_metadata.encoder_seq_data.get_len() if seq_group_metadata.encoder_seq_data else 0
+                    encoder_seq_lens.append(seq_len)
+
+        print("encoder_seq_lens is ", encoder_seq_lens)
+        encoder_seq_lens_tensor = _list_to_int32_tensor(encoder_seq_lens, self.device)
+        encoder_seq_start_loc = torch.zeros(encoder_seq_lens_tensor.shape[0] +
+                                            1,
+                                            dtype=torch.int32,
+                                            device=self.device)
+        torch.cumsum(encoder_seq_lens_tensor,
+                     dim=0,
+                     dtype=encoder_seq_start_loc.dtype,
+                     out=encoder_seq_start_loc[1:])
+
+        return encoder_seq_lens, encoder_seq_lens_tensor
+
     def prepare_input_tensors(
         self,
-        seq_group_metadata_list: List[SequenceGroupMetadata],
+        seq_group_metadata_list: List[SequenceGroupMetadata]
     ) -> Tuple[TModelInputForHPU, SamplingMetadata]:
         if len(seq_group_metadata_list) == 0:
             return self._model_input_cls(), None
@@ -1098,6 +1146,9 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             decode_slot_mapping,
             decode_lora_ids,
         ) = self._prepare_decode(decode_reqs)
+        if self.is_encoder_decoder_model:
+            # prepare encoder_seq_lens and encoder_seq_lens_tensor
+            encoder_seq_lens, encoder_seq_lens_tensor = self._prepare_encoder_model_input_tensors(seq_group_metadata_list)
         sampling_metadata = SamplingMetadata.prepare(seq_group_metadata_list,
                                                      seq_lens, query_lens,
                                                      self.device,
@@ -1183,6 +1234,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         attn_metadata = prefill_attn_metadata if \
             prefill_attn_metadata is not None else decode_attn_metadata
 
+        attn_metadata.encoder_seq_lens, attn_metadata.encoder_seq_lens_tensor = encoder_seq_lens, encoder_seq_lens_tensor
+
         return self._model_input_cls(input_tokens=input_tokens,
                                      seq_lens=seq_lens,
                                      query_lens=query_lens,
@@ -1226,7 +1279,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         attention_metadata = subtuple(metadata, 'TrimmedAttentionMetadata', [
             'attn_bias', 'seq_lens_tensor', 'block_list', 'block_mapping',
             'block_usage', 'slot_mapping', 'is_prompt', 'block_indices',
-            'block_offsets'
+            'block_offsets', 'num_prefill_tokens', 'num_decode_tokens',
+            'encoder_seq_lens', 'encoder_seq_lens_tensor'
         ])
         return attention_metadata
 
