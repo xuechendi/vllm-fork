@@ -578,6 +578,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self.prompt_adapter_config = prompt_adapter_config
         self.return_hidden_states = return_hidden_states
         self.observability_config = observability_config
+        self.sampling_time = {}
 
         self.sliding_window = (model_config.get_sliding_window()
                                if model_config is not None else None)
@@ -1183,6 +1184,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                                     dtype=self.model_config.dtype,
                                     device=self.device)
 
+        #print(f"block_mapping shape is ", block_mapping.shape, "content is ", block_mapping)
         attn_metadata = self.attn_backend.make_metadata(
             is_prompt=False,
             block_list=block_list,
@@ -1266,6 +1268,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             slot_mapping,
             lora_ids,
         ) = self._prepare_prompt(prefill_reqs)
+        start = time.perf_counter()
         (
             decode_input_tokens,
             decode_input_positions,
@@ -1352,6 +1355,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             "seq_lens": seq_lens,
             "query_lens": query_lens
         }
+
         if prefill_attn_metadata is not None:
             metadata_dict.update(prefill_attn_metadata.asdict_zerocopy())
         else:
@@ -2044,6 +2048,7 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
         num_steps: int = 1,
         warmup_mode=False,
     ) -> Optional[Union[List[SamplerOutput], IntermediateTensors]]:
+        start = time.perf_counter()
         if not model_input.is_first_multi_step:
             if not model_input.is_last_step:
                 # not first or last multi-step
@@ -2198,6 +2203,10 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                     real_batch_size=real_batch_size,
                     is_prompt=is_prompt)
                 self.profiler.record_counter(self.event_start, counters)
+            if not is_prompt:
+                if batch_size not in self.sampling_time:
+                    self.sampling_time[batch_size] = []
+                self.sampling_time[batch_size].append(time.perf_counter() - start)
             if num_steps == 1:
                 return [output]
             else:
@@ -2267,6 +2276,19 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                 finalize_calibration)
             finalize_calibration(self.model.model)
             self._is_inc_finalized = True
+    
+    def print_perf(self):
+        try:
+            sampling_statistic = [f"fwd + logits + sampling: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.sampling_time.items()]  # noqa: E501
+        except:
+            sampling_statistic = []
+        print(sampling_statistic)
+
+    def reset_perf(self):
+        self.sampling_time = {}
 
     def __del__(self):
-        self.shutdown_inc()
+        try:
+            self.shutdown_inc()
+        except:
+            pass
