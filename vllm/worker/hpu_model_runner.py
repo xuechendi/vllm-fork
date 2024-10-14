@@ -971,6 +971,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         max_idx = max(block_list)
         max_blocks = max(max_idx + 1, len(block_list))
         block_bucket_size = find_bucket(max_blocks, self.decode_block_bucket_cfg)
+        block_bucket_size = min(block_bucket_size, self.cache_config.num_gpu_blocks)
 
         block_mapping = [None] * block_bucket_size
         block_usage = [None] * block_bucket_size
@@ -982,7 +983,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         block_mapping = [b if b is not None else 0 for b in block_mapping]
 
         for bt, sl in zip(block_tables, slot_mapping):
-            block_usage[bt[-1]] = sl[-1] % self.block_size + 1
+            if bt:
+                block_usage[bt[-1]] = sl[-1] % self.block_size + 1
         block_usage = [u if u is not None else 0 for u in block_usage]                
 
         block_list = pad_list(block_list, block_bucket_size, _PAD_SLOT_ID)
