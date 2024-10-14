@@ -1029,6 +1029,7 @@ class SchedulerConfig:
         self.multi_step_stream_outputs = multi_step_stream_outputs
         self.send_delta_data = send_delta_data
         self.policy = policy
+        self.max_num_batched_tokens = self.max_num_seqs if self.max_num_batched_tokens < self.max_num_seqs else self.max_num_batched_tokens # noqa: E501
         self._verify_args()
 
     def _verify_args(self) -> None:

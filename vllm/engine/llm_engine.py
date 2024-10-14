@@ -291,6 +291,9 @@ class LLMEngine:
             use_cached_outputs,
             model_config.mm_processor_kwargs,
         )
+        logger.info("Cache config is %r", cache_config.__dict__)
+        logger.info("Scheduler config is %r", scheduler_config.__dict__)
+        logger.info("Model Config is %r", model_config.__dict__)
         # TODO(woosuk): Print more configs in debug mode.
         self.model_config = model_config
         self.cache_config = cache_config
