@@ -519,6 +519,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self.prompt_adapter_config = prompt_adapter_config
         self.return_hidden_states = return_hidden_states
         self.observability_config = observability_config
+        self.fwd_time = {}
 
         self.sliding_window = (model_config.get_sliding_window()
                                if model_config is not None else None)
@@ -1904,11 +1905,20 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                                 f"graphs{'T' if use_graphs else 'F'}")
         else:
             model_event_name = 'model_executable'
+        start = time.perf_counter()
         with self.profiler.record_event('internal', model_event_name):
             hidden_states = self.model.forward(
                 **execute_model_kwargs,
                 selected_token_indices=sampling_metadata.selected_token_indices
             )
+        if not is_prompt:
+            htorch.hpu.synchronize()
+            elapase = time.perf_counter() - start
+            
+            bs = hidden_states.shape[0]
+            if bs not in self.fwd_time:
+                self.fwd_time[bs] = []
+            self.fwd_time[bs].append(elapase)
 
         if self.lora_config:
             LoraMask.setLoraMask(
@@ -1972,6 +1982,24 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                 finalize_calibration)
             finalize_calibration(self.model.model)
             self._is_inc_finalized = True
+    
+    def print_perf(self):
+        try:
+            next_token_statistic = [f"model fwd: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.fwd_time.items()]  # noqa: E501
+        except:
+            next_token_statistic = []
+        print(next_token_statistic)
+
+    def reset_perf(self):
+        self.fwd_time = {}
 
     def __del__(self):
-        self.shutdown_inc()
+        # try:
+        #     next_token_statistic = [f"model fwd: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.fwd_time.items()]  # noqa: E501
+        # except:
+        #     next_token_statistic = []
+        # print(next_token_statistic)
+        try:
+            self.shutdown_inc()
+        except:
+            pass
