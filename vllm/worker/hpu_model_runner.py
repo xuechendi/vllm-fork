@@ -519,6 +519,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self.prompt_adapter_config = prompt_adapter_config
         self.return_hidden_states = return_hidden_states
         self.observability_config = observability_config
+        self.sampling_time = {}
 
         self.sliding_window = (model_config.get_sliding_window()
                                if model_config is not None else None)
@@ -1082,6 +1083,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             slot_mapping,
             lora_ids,
         ) = self._prepare_prompt(prefill_reqs)
+        start = time.perf_counter()
         (
             decode_input_tokens,
             decode_input_positions,
@@ -1123,18 +1125,20 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         # for padding
         max_len = input_tokens.size(1)
         paddings = [max_len - s for s in seq_lens]
-        paddings = [0] + paddings[:-1]
-        paddings = list(itertools.accumulate(paddings))
-        paddings_prompt_logprobs = []
-        for i, seq_group_metadata in enumerate(seq_group_metadata_list):
-            if seq_group_metadata.sampling_params.prompt_logprobs is not None \
-                              and seq_group_metadata.is_prompt:
-                paddings_prompt_logprobs += ([paddings[i]] * seq_lens[i])
-        paddings = torch.tensor(
-            paddings_prompt_logprobs if paddings_prompt_logprobs else paddings,
-            dtype=sampling_metadata.selected_token_indices.dtype,
-            device=sampling_metadata.selected_token_indices.device)
-        sampling_metadata.selected_token_indices.add_(paddings)
+        to_pad_slots = sum(paddings)
+        if to_pad_slots > 0:
+            paddings = [0] + paddings[:-1]
+            paddings = list(itertools.accumulate(paddings))
+            paddings_prompt_logprobs = []
+            for i, seq_group_metadata in enumerate(seq_group_metadata_list):
+                if seq_group_metadata.sampling_params.prompt_logprobs is not None \
+                                and seq_group_metadata.is_prompt:
+                    paddings_prompt_logprobs += ([paddings[i]] * seq_lens[i])
+            paddings = torch.tensor(
+                paddings_prompt_logprobs if paddings_prompt_logprobs else paddings,
+                dtype=sampling_metadata.selected_token_indices.dtype,
+                device=sampling_metadata.selected_token_indices.device)
+            sampling_metadata.selected_token_indices.add_(paddings)
 
         if self.lora_config:
             lora_mapping = LoRAMapping(
@@ -1168,6 +1172,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             "seq_lens": seq_lens,
             "query_lens": query_lens
         }
+
         if prefill_attn_metadata is not None:
             metadata_dict.update(prefill_attn_metadata.asdict_zerocopy())
         else:
@@ -1904,6 +1909,7 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                                 f"graphs{'T' if use_graphs else 'F'}")
         else:
             model_event_name = 'model_executable'
+        start = time.perf_counter()
         with self.profiler.record_event('internal', model_event_name):
             hidden_states = self.model.forward(
                 **execute_model_kwargs,
@@ -1944,6 +1950,14 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
             )
         output.outputs = output.outputs[:real_batch_size]
         htorch.core.mark_step()
+        if not is_prompt:
+            htorch.hpu.synchronize()
+            elapase = time.perf_counter() - start
+            
+            bs = hidden_states.shape[0]
+            if bs not in self.sampling_time:
+                self.sampling_time[bs] = []
+            self.sampling_time[bs].append(elapase)
 
         if self.is_driver_worker and self.profiler.enabled:
             # Stop recording 'execute_model' event
@@ -1972,6 +1986,19 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                 finalize_calibration)
             finalize_calibration(self.model.model)
             self._is_inc_finalized = True
+    
+    def print_perf(self):
+        try:
+            sampling_statistic = [f"fwd + logits + sampling: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.sampling_time.items()]  # noqa: E501
+        except:
+            sampling_statistic = []
+        print(sampling_statistic)
+
+    def reset_perf(self):
+        self.sampling_time = {}
 
     def __del__(self):
-        self.shutdown_inc()
+        try:
+            self.shutdown_inc()
+        except:
+            pass
