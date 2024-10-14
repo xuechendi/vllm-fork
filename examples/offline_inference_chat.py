@@ -1,6 +1,6 @@
 from vllm import LLM, SamplingParams
 
-llm = LLM(model="meta-llama/Meta-Llama-3-8B-Instruct")
+llm = LLM(model="meta-llama/Meta-Llama-3.1-8B-Instruct")
 sampling_params = SamplingParams(temperature=0.5)
 
 
