@@ -2,13 +2,12 @@ from typing import List, Optional
 
 import torch
 
-from vllm.forward_context import set_forward_context
-from vllm.model_executor.layers.sampler import SamplerOutput
-
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          ModelConfig, ObservabilityConfig, ParallelConfig,
                          PromptAdapterConfig, SchedulerConfig)
+from vllm.forward_context import set_forward_context
 from vllm.logger import init_logger
+from vllm.model_executor.layers.sampler import SamplerOutput
 from vllm.multimodal import MultiModalInputs
 from vllm.sequence import ExecuteModelRequest, IntermediateTensors
 from vllm.worker.model_runner import (ModelInputForGPUWithSamplingMetadata,
@@ -23,10 +22,9 @@ try:
         # vllm_flash_attn is not installed, try the ROCm FA metadata
         from vllm.attention.backends.rocm_flash_attn import (
             ROCmFlashAttentionMetadata as FlashAttentionMetadata)
-except:
-    logger.warning(
-        "Draft model speculative decoding currently only supports"
-        "CUDA and ROCm flash attention backend.")
+except Exception as e:
+    logger.warning("Draft model speculative decoding currently only supports"
+                   "CUDA and ROCm flash attention backend.", e)
 
 # A flag to enable debug prints for the updated input tensors
 # before each step.
