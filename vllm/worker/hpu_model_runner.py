@@ -348,6 +348,8 @@ class HpuModelAdapter():
     def sample(self, *args, **kwargs):
         return self.model.sample(*args, **kwargs)
 
+    # sampler property will be used by spec_decode_worker
+    # don't rename
     @property
     def sampler(self):
         return self.model.sampler
