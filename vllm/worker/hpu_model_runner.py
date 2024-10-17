@@ -981,7 +981,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                 if block_mapping[b] is None:
                     block_mapping[b] = i
                     block_usage[b] = self.block_size
-        block_mapping = [b if b is not None else 0 for b in block_mapping]
+        block_mapping = [b if b is not None else -1 for b in block_mapping]
 
         for bt, sl in zip(block_tables, slot_mapping):
             if bt:
