@@ -182,6 +182,8 @@ class LocalOrDistributedWorkerBase(WorkerBase):
     observability_config: Optional[ObservabilityConfig] = None
     first_token = {}
     next_token = {}
+    prepare_input_time = {}
+    execute_worker_time = {}
     
     def print_perf(self):
         try:
@@ -191,13 +193,21 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         try:
             next_token_statistic = [f"Next Token: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.next_token.items()]  # noqa: E501
         except:
-            next_token_statistic = [] 
+            next_token_statistic = []
+        try:
+            execute_worker_statistic = [f"Prepare Input: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.execute_worker_time.items()]  # noqa: E501
+        except:
+            execute_worker_statistic = [] 
+        #print(prepare_input_statistic)
         print(first_token_statistic)
         print(next_token_statistic)
+        print(execute_worker_statistic)
     
     def reset_perf(self):
         self.first_token = {}
         self.next_token = {}
+        self.prepare_input_time = {}
+        self.execute_worker_time = {}
 
     @property
     @abstractmethod
@@ -319,6 +329,12 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         start_time = time.perf_counter()
 
         inputs = self.prepare_input(execute_model_req)
+        if not inputs[0].is_prompt:
+            bs = inputs[0].input_tokens.shape[:1]
+            if bs not in self.prepare_input_time:
+                self.prepare_input_time[bs]  = []
+            self.prepare_input_time[bs].append(time.perf_counter() - start_time)
+        
         if inputs is None:
             return None
 
@@ -326,6 +342,11 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         num_steps = worker_input.num_steps
 
         self.execute_worker(worker_input)
+        if not inputs[0].is_prompt:
+            bs = inputs[0].input_tokens.shape[:1]
+            if bs not in self.execute_worker_time:
+                self.execute_worker_time[bs]  = []
+            self.execute_worker_time[bs].append(time.perf_counter() - start_time)
 
         # If there is no input, we don't need to execute the model.
         if worker_input.num_seq_groups == 0:

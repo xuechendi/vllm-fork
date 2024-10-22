@@ -520,6 +520,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self.return_hidden_states = return_hidden_states
         self.observability_config = observability_config
         self.fwd_time = {}
+        self.logits_process_time = {}
+        self.sampling_time = {}
 
         self.sliding_window = (model_config.get_sliding_window()
                                if model_config is not None else None)
@@ -1912,7 +1914,7 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                 selected_token_indices=sampling_metadata.selected_token_indices
             )
         if not is_prompt:
-            htorch.hpu.synchronize()
+            #htorch.hpu.synchronize()
             elapase = time.perf_counter() - start
             
             bs = hidden_states.shape[0]
@@ -1935,6 +1937,14 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
             logits = self.model.compute_logits(hidden_states,
                                                sampling_metadata)
         htorch.core.mark_step()
+        if not is_prompt:
+            #htorch.hpu.synchronize()
+            elapase = time.perf_counter() - start
+            
+            bs = hidden_states.shape[0]
+            if bs not in self.logits_process_time:
+                self.logits_process_time[bs] = []
+            self.logits_process_time[bs].append(elapase)
         # Only perform sampling in the driver worker.
         if not self.is_driver_worker:
             return []
@@ -1954,6 +1964,14 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
             )
         output.outputs = output.outputs[:real_batch_size]
         htorch.core.mark_step()
+        if not is_prompt:
+            htorch.hpu.synchronize()
+            elapase = time.perf_counter() - start
+            
+            bs = hidden_states.shape[0]
+            if bs not in self.sampling_time:
+                self.sampling_time[bs] = []
+            self.sampling_time[bs].append(elapase)
 
         if self.is_driver_worker and self.profiler.enabled:
             # Stop recording 'execute_model' event
@@ -1984,14 +2002,26 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
             self._is_inc_finalized = True
     
     def print_perf(self):
+        # try:
+        #     model_fwd_statistic = [f"model fwd: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.fwd_time.items()]  # noqa: E501
+        # except:
+        #     model_fwd_statistic = []
+        # try:
+        #     logits_statistic = [f"logits process: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.logits_process_time.items()]  # noqa: E501
+        # except:
+        #     logits_statistic = []
         try:
-            next_token_statistic = [f"model fwd: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.fwd_time.items()]  # noqa: E501
+            sampling_statistic = [f"fwd + logits + sampling: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.sampling_time.items()]  # noqa: E501
         except:
-            next_token_statistic = []
-        print(next_token_statistic)
+            sampling_statistic = []
+        # print(model_fwd_statistic)
+        # print(logits_statistic)
+        print(sampling_statistic)
 
     def reset_perf(self):
         self.fwd_time = {}
+        self.logits_process_time = {}
+        self.sampling_time = {}
 
     def __del__(self):
         # try:
