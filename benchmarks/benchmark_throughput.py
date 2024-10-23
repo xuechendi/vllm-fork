@@ -403,7 +403,7 @@ def main(args: argparse.Namespace):
                         for _, prompt_len, output_len in requests)
     print("====== Final Result ======")
     print(f"Throughput: {len(requests) / elapsed_time:.2f} requests/s, ")
-    print(f"duration: {elapsed_time:.2f} secs, inter-token latency: {elapsed_time * 1000 / out_num_tokens:.2f} msecs")
+    print(f"duration: {elapsed_time:.2f} secs, inter-token latency: {(elapsed_time * 1000 / (out_num_tokens/len(requests))):.2f} msecs")
     print(f"Total Throughput: {total_num_tokens / elapsed_time:.2f} tokens/s")
     print(f"Input Throughput: {in_num_tokens / elapsed_time:.2f} tokens/s")
     print(f"Output Throughput: {out_num_tokens / elapsed_time:.2f} tokens/s")
