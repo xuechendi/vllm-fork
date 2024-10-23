@@ -184,7 +184,6 @@ class LocalOrDistributedWorkerBase(WorkerBase):
     next_token = {}
     prepare_input_time = {}
     execute_worker_time = {}
-    prepare_input_time_internal = {}
     
     def print_perf(self):
         try:
@@ -199,22 +198,16 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             execute_worker_statistic = [f"Prepare Input: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.execute_worker_time.items()]  # noqa: E501
         except:
             execute_worker_statistic = []
-        try:
-            prepare_input_statistic = [f"Prepare Input: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.prepare_input_time_internal.items()]  # noqa: E501
-        except:
-            prepare_input_statistic = []
         #print(prepare_input_statistic)
         print(first_token_statistic)
         print(next_token_statistic)
         print(execute_worker_statistic)
-        print(prepare_input_statistic)
     
     def reset_perf(self):
         self.first_token = {}
         self.next_token = {}
         self.prepare_input_time = {}
         self.execute_worker_time = {}
-        self.prepare_input_time_internal = {}
 
     @property
     @abstractmethod
@@ -282,7 +275,6 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         """ Get the driver input and broadcast it to other workers.  """
         assert self.is_driver_worker
 
-        start = time.perf_counter()
         worker_input: WorkerInput = self.prepare_worker_input(
             execute_model_req=execute_model_req)
         model_input: ModelRunnerInputBase = (
@@ -290,11 +282,6 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 execute_model_req.seq_group_metadata_list,
                 execute_model_req.virtual_engine,
                 execute_model_req.finished_requests_ids))
-        elapsed = time.perf_counter() - start
-        bs = model_input.input_tokens.shape[:1]
-        if bs not in self.prepare_input_time_internal:
-            self.prepare_input_time_internal[bs] = []
-        self.prepare_input_time_internal[bs].append(elapsed)
 
         kwargs = extract_previous_hidden_states(execute_model_req)
 
@@ -342,11 +329,6 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         start_time = time.perf_counter()
 
         inputs = self.prepare_input(execute_model_req)
-        if not inputs[0].is_prompt:
-            bs = inputs[0].input_tokens.shape[:1]
-            if bs not in self.prepare_input_time:
-                self.prepare_input_time[bs]  = []
-            self.prepare_input_time[bs].append(time.perf_counter() - start_time)
         
         if inputs is None:
             return None
