@@ -91,9 +91,7 @@ def run_vllm(
     load_format: str = EngineArgs.load_format,
     disable_async_output_proc: bool = False,
     weights_load_device: str = None,
-    use_padding_aware_scheduling: bool = False,
     max_num_seqs: int = 256,
-    max_num_prefill_seqs: int = None,
 ) -> float:
     from vllm import LLM, SamplingParams
     llm = LLM(
@@ -120,9 +118,7 @@ def run_vllm(
         use_v2_block_manager=use_v2_block_manager,
         disable_async_output_proc=disable_async_output_proc,
         weights_load_device=weights_load_device,
-        use_padding_aware_scheduling=use_padding_aware_scheduling,
         max_num_seqs=max_num_seqs,
-        max_num_prefill_seqs=max_num_prefill_seqs,
     )
 
     # Add the requests to the engine.
@@ -137,6 +133,12 @@ def run_vllm(
                 ignore_eos=True,
                 max_tokens=output_len,
             ))
+    # from vllm.utils import Device
+    # for i in range(5):
+    #     start = time.perf_counter()
+    #     llm.generate(prompts, sampling_params, use_tqdm=True)
+    #     end = time.perf_counter()
+        # print(llm.llm_engine.scheduler[0].block_manager.block_allocator._allocators[Device.GPU]._free_block_indices)
 
     use_beam_search = False
 
@@ -181,7 +183,6 @@ def run_vllm(
         print(f"Output Throughput: {out_num_tokens / elapsed_time:.2f} tokens/s")
     return elapsed_time
 
-
 async def run_vllm_async(
     requests: List[Tuple[str, int, int]],
     model: str,
@@ -209,9 +210,7 @@ async def run_vllm_async(
     disable_async_output_proc: bool = False,
     disable_frontend_multiprocessing: bool = False,
     weights_load_device: str = None,
-    use_padding_aware_scheduling: bool = False,
     max_num_seqs: int = 256,
-    max_num_prefill_seqs: int = None,
 ) -> float:
     from vllm import SamplingParams
     engine_args = AsyncEngineArgs(
@@ -240,8 +239,6 @@ async def run_vllm_async(
         worker_use_ray=False,
         disable_log_requests=True,
         weights_load_device=weights_load_device,
-        use_padding_aware_scheduling=use_padding_aware_scheduling,
-        max_num_prefill_seqs=max_num_prefill_seqs,
     )
 
     async with build_async_engine_client_from_engine_args(
@@ -376,9 +373,7 @@ def main(args: argparse.Namespace):
             args.max_num_batched_tokens, args.distributed_executor_backend,
             args.gpu_memory_utilization, args.num_scheduler_steps,
             args.use_v2_block_manager, args.download_dir, args.load_format,
-            args.disable_async_output_proc, args.weights_load_device,
-            args.use_padding_aware_scheduling, args.max_num_seqs,
-            args.max_num_prefill_seqs
+            args.disable_async_output_proc, args.weights_load_device, args.max_num_seqs,
         ]
 
         if args.async_engine:
