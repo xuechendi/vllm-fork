@@ -1,0 +1,50 @@
+Namespace(backend='vllm', dataset=None, input_len=1024, output_len=1024, model='meta-llama/Meta-Llama-3.1-8B-Instruct', tokenizer='meta-llama/Meta-Llama-3.1-8B-Instruct', quantization=None, tensor_parallel_size=1, n=1, num_prompts=128, seed=0, hf_max_batch_size=None, trust_remote_code=False, max_model_len=2048, dtype='auto', gpu_memory_utilization=0.9, enforce_eager=False, kv_cache_dtype='auto', quantization_param_path=None, device='cuda', num_scheduler_steps=1, enable_prefix_caching=False, enable_chunked_prefill=False, max_num_batched_tokens=None, download_dir=None, output_json=None, distributed_executor_backend=None, load_format='auto', disable_async_output_proc=False, async_engine=False, disable_frontend_multiprocessing=False)
+INFO 10-24 10:41:13 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Meta-Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Meta-Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=2048, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=meta-llama/Meta-Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 10-24 10:41:14 model_runner.py:1059] Starting to load model meta-llama/Meta-Llama-3.1-8B-Instruct...
+INFO 10-24 10:41:15 weight_utils.py:243] Using model weights format ['*.safetensors']
+Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:00<00:02,  1.47it/s]
+Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:01<00:01,  1.28it/s]
+Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:01<00:00,  1.73it/s]
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:02<00:00,  1.56it/s]
+Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:02<00:00,  1.54it/s]
+
+INFO 10-24 10:41:18 model_runner.py:1070] Loading model weights took 14.9888 GB
+INFO 10-24 10:41:18 gpu_executor.py:122] # GPU blocks: 27984, # CPU blocks: 2048
+INFO 10-24 10:41:18 gpu_executor.py:126] Maximum concurrency for 2048 tokens per request: 218.62x
+INFO 10-24 10:41:19 model_runner.py:1398] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 10-24 10:41:19 model_runner.py:1402] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 10-24 10:41:26 model_runner.py:1526] Graph capturing finished in 6 secs.
+Processed prompts:   0%|          | 0/128 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts:   1%|          | 1/128 [00:24<52:22, 24.74s/it, est. speed input: 41.39 toks/s, output: 41.39 toks/s]Processed prompts: 100%|██████████| 128/128 [00:24<00:00,  5.17it/s, est. speed input: 5297.35 toks/s, output: 5297.35 toks/s]
+['First Token: bs == torch.Size([2048]), avg_time is 52.83664674998079 msecs, counts is 64\n']
+['Next Token: bs == torch.Size([128]), avg_time is 19.25150372754203 msecs, counts is 1024\n']
+['model fwd: bs == 2048, avg_time is 51.36908262968063 msecs, counts is 65\n', 'model fwd: bs == 128, avg_time is 15.391493541870416 msecs, counts is 1024\n']
+====== Warmup ======
+Throughput: 5.16 requests/s, 
+Total Throughput: 10564.92 tokens/s
+Input Throughput: 5282.46 tokens/s
+Output Throughput: 5282.46 tokens/s
+Processed prompts:   0%|          | 0/128 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts:   1%|          | 1/128 [00:24<52:23, 24.76s/it, est. speed input: 41.36 toks/s, output: 41.36 toks/s]Processed prompts: 100%|██████████| 128/128 [00:24<00:00,  5.17it/s, est. speed input: 5294.37 toks/s, output: 5294.36 toks/s]
+['First Token: bs == torch.Size([2048]), avg_time is 53.19726753128151 msecs, counts is 64\n']
+['Next Token: bs == torch.Size([128]), avg_time is 19.143641214845353 msecs, counts is 1024\n']
+['model fwd: bs == 2048, avg_time is 51.71935030013796 msecs, counts is 64\n', 'model fwd: bs == 128, avg_time is 15.414596813981252 msecs, counts is 1024\n']
+====== Warmup ======
+Throughput: 5.16 requests/s, 
+Total Throughput: 10559.73 tokens/s
+Input Throughput: 5279.87 tokens/s
+Output Throughput: 5279.87 tokens/s
+Processed prompts:   0%|          | 0/128 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts:   1%|          | 1/128 [00:25<52:56, 25.01s/it, est. speed input: 40.94 toks/s, output: 40.94 toks/s]Processed prompts: 100%|██████████| 128/128 [00:25<00:00,  5.12it/s, est. speed input: 5239.71 toks/s, output: 5239.71 toks/s]
+['First Token: bs == torch.Size([2048]), avg_time is 53.287464031278375 msecs, counts is 64\n']
+['Next Token: bs == torch.Size([128]), avg_time is 19.35899247266315 msecs, counts is 1024\n']
+['model fwd: bs == 2048, avg_time is 51.816265287853426 msecs, counts is 64\n', 'model fwd: bs == 128, avg_time is 15.432232647930306 msecs, counts is 1024\n']
+====== Warmup ======
+Throughput: 5.10 requests/s, 
+Total Throughput: 10452.49 tokens/s
+Input Throughput: 5226.24 tokens/s
+Output Throughput: 5226.24 tokens/s
+====== Final Result ======
+Throughput: 5.10 requests/s, 
+duration: 25.08 secs, inter-token latency: 24.49 msecs
+Total Throughput: 10452.49 tokens/s
+Input Throughput: 5226.24 tokens/s
+Output Throughput: 5226.24 tokens/s

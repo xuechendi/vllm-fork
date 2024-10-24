@@ -1,0 +1,26 @@
+Namespace(backend='vllm', base_url=None, host='localhost', port=18080, endpoint='/v1/completions', dataset=None, dataset_name='sonnet', dataset_path='vllm/benchmarks/sonnet.txt', max_concurrency=None, model='meta-llama/Meta-Llama-3.1-8B-Instruct', tokenizer=None, best_of=1, use_beam_search=False, num_prompts=128, logprobs=None, request_rate=512.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=False, metadata=None, result_dir=None, result_filename=None, ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=1024, sonnet_output_len=1024, sonnet_prefix_len=100, sharegpt_output_len=None, random_input_len=1024, random_output_len=128, random_range_ratio=1.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None)
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: 512.0
+Maximum request concurrency: None
+============ Serving Benchmark Result ============
+Successful requests:                     128       
+Benchmark duration (s):                  24.57     
+Total input tokens:                      119075    
+Total generated tokens:                  130951    
+Request throughput (req/s):              5.21      
+Output token throughput (tok/s):         5329.30   
+Total Token throughput (tok/s):          10175.28  
+---------------Time to First Token----------------
+Mean TTFT (ms):                          1517.39   
+Median TTFT (ms):                        1494.99   
+P99 TTFT (ms):                           2907.94   
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          22.38     
+Median TPOT (ms):                        22.41     
+P99 TPOT (ms):                           23.85     
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           22.37     
+Median ITL (ms):                         20.14     
+P99 ITL (ms):                            24.56     
+==================================================
