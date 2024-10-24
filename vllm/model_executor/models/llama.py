@@ -190,9 +190,6 @@ class LlamaAttention(nn.Module):
         output, _ = self.o_proj(attn_output)
         return output
 
-class NoopLlamaAttention(LlamaAttention):
-    def forward(self, **kwargs):
-        return kwargs.get("hidden_states", None)
 
 class LlamaDecoderLayer(nn.Module):
 
@@ -217,13 +214,7 @@ class LlamaDecoderLayer(nn.Module):
         # Support internlm/internlm-7b with bias
         attention_bias = getattr(config, "attention_bias", False) or getattr(
             config, "bias", False)
-        layer_idx = int(prefix.split('.')[2])
-         
-        if layer_idx % 1 == 0:
-            attn_cls = LlamaAttention
-        else:
-            attn_cls = NoopLlamaAttention
-        self.self_attn = attn_cls(
+        self.self_attn = LlamaAttention(
             config=config,
             hidden_size=self.hidden_size,
             num_heads=config.num_attention_heads,

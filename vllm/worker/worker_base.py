@@ -180,24 +180,6 @@ class LocalOrDistributedWorkerBase(WorkerBase):
     is_driver_worker: bool
     model_runner: ModelRunnerBase
     observability_config: Optional[ObservabilityConfig] = None
-    first_token = {}
-    next_token = {}
-    
-    def print_perf(self):
-        try:
-            first_token_statistic = [f"First Token: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.first_token.items()]  # noqa: E501
-        except:
-            first_token_statistic = []
-        try:
-            next_token_statistic = [f"Next Token: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.next_token.items()]  # noqa: E501
-        except:
-            next_token_statistic = [] 
-        print(first_token_statistic)
-        print(next_token_statistic)
-
-    def reset_perf(self):
-        self.first_token = {}
-        self.next_token = {}
 
     @property
     @abstractmethod
@@ -352,15 +334,6 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         )
 
         model_execute_time = time.perf_counter() - start_time
-        bs = model_input.input_tokens.shape[:1]
-        if model_input.is_prompt:
-            if bs not in self.first_token:
-                self.first_token[bs] = []
-            self.first_token[bs].append(model_execute_time)
-        else:
-            if bs not in self.next_token:
-                self.next_token[bs] = []
-            self.next_token[bs].append(model_execute_time)
         if not get_pp_group().is_last_rank:
             # output is IntermediateTensors
             if (self.observability_config is not None

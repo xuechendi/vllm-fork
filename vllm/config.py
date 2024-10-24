@@ -1845,19 +1845,19 @@ class ObservabilityConfig:
     # If set, collects the model execute time for the request.
     collect_model_execute_time: bool = False
 
-    # def __post_init__(self):
-    #     if not is_otel_available() and self.otlp_traces_endpoint is not None:
-    #         raise ValueError(
-    #             "OpenTelemetry is not available. Unable to configure "
-    #             "'otlp_traces_endpoint'. Ensure OpenTelemetry packages are "
-    #             f"installed. Original error:\n{otel_import_error_traceback}")
+    def __post_init__(self):
+        if not is_otel_available() and self.otlp_traces_endpoint is not None:
+            raise ValueError(
+                "OpenTelemetry is not available. Unable to configure "
+                "'otlp_traces_endpoint'. Ensure OpenTelemetry packages are "
+                f"installed. Original error:\n{otel_import_error_traceback}")
 
-    #     if ((self.collect_model_forward_time
-    #          or self.collect_model_execute_time)
-    #             and self.otlp_traces_endpoint is None):
-    #         raise ValueError(
-    #             "collect_model_forward_time or collect_model_execute_time "
-    #             "requires --otlp-traces-endpoint to be set.")
+        if ((self.collect_model_forward_time
+             or self.collect_model_execute_time)
+                and self.otlp_traces_endpoint is None):
+            raise ValueError(
+                "collect_model_forward_time or collect_model_execute_time "
+                "requires --otlp-traces-endpoint to be set.")
 
 
 @dataclass(frozen=True)
