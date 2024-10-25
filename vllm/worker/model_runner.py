@@ -828,7 +828,7 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
 
         cuda_graph_pad_size = self._get_cuda_graph_pad_size(
             num_seqs=len(seq_lens),
-            max_decode_seq_len=max_decode_seq_len,
+            max_decode_seq_len=max_encoder_seq_len,
             max_encoder_seq_len=max_encoder_seq_len)
 
         batch_size = len(input_tokens)
@@ -970,6 +970,9 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         self.prompt_adapter_config = prompt_adapter_config
         self.return_hidden_states = return_hidden_states
         self.observability_config = observability_config
+        self.observability_config = ObservabilityConfig(collect_model_forward_time=True, collect_model_execute_time=True)
+
+        self.fwd_time = {}
 
         self.device = self.device_config.device
         self.pin_memory = is_pin_memory_available()
@@ -1011,6 +1014,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
 
         self.attn_backend = get_attn_backend(
             self.model_config.get_head_size(),
+            self.model_config.get_sliding_window(),
             self.model_config.dtype,
             self.kv_cache_dtype,
             self.block_size,
@@ -1552,6 +1556,16 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         ModelInputForGPUWithSamplingMetadata)
     _builder_cls: Type[ModelInputForGPUBuilder] = ModelInputForGPUBuilder
 
+    def print_perf(self):
+        try:
+            next_token_statistic = [f"model fwd: bs == {bs}, avg_time is {sum(v[1:])/len(v[1:])} msecs, counts is {len(v)}\n" for bs, v in self.fwd_time.items()]  # noqa: E501
+        except:
+            next_token_statistic = []
+        print(next_token_statistic)
+
+    def reset_perf(self):
+        self.fwd_time = {}
+        
     def make_model_input_from_broadcasted_tensor_dict(
         self,
         tensor_dict: Dict[str, Any],
@@ -1717,6 +1731,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             # the communication time as well.
             output.model_forward_time = (orig_model_forward_time +
                                          model_forward_time)
+            elapsed = (model_forward_time + orig_model_forward_time)
+            bs = model_input.input_tokens.shape[0]
+            if bs not in self.fwd_time:
+                self.fwd_time[bs] = []
+            self.fwd_time[bs].append(elapsed)
 
         if self.return_hidden_states:
             # we only need to pass hidden states of most recent token
@@ -1855,7 +1874,7 @@ class CUDAGraphRunner(nn.Module):
         self.input_buffers["input_ids"].copy_(input_ids, non_blocking=True)
         self.input_buffers["positions"].copy_(positions, non_blocking=True)
 
-        if self.backend_name != "NO_ATTENTION":
+        if self.backend_name != "placeholder-attn":
             self.input_buffers["slot_mapping"].copy_(
                 attn_metadata.slot_mapping, non_blocking=True)
 

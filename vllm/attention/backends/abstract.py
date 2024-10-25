@@ -15,11 +15,8 @@ if TYPE_CHECKING:
 
 class AttentionType(Enum):
     DECODER = auto()  # Decoder attention between previous layer Q/K/V
-    ENCODER = auto(
-    )  # Encoder attention between previous layer Q/K/V for encoder-decoder
-    ENCODER_ONLY = auto()  # Encoder attention between previous layer Q/K/V
-    ENCODER_DECODER = auto(
-    )  # Attention between dec. Q and enc. K/V for encoder-decoder
+    ENCODER = auto()  # Encoder attention between previous layer Q/K/V
+    ENCODER_DECODER = auto()  # Attention between dec. Q and enc. K/V
 
 
 class AttentionBackend(ABC):

@@ -1,7 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List, Optional
-
-from vllm.sequence import Logprob
+from typing import List, Optional
 
 
 @dataclass
@@ -13,7 +11,6 @@ class BeamSearchSequence:
     """
     # The tokens includes the prompt.
     tokens: List[int]
-    logprobs: List[Dict[int, Logprob]]
     cum_logprob: float = 0.0
     text: Optional[str] = None
 
@@ -31,7 +28,7 @@ class BeamSearchInstance:
 
     def __init__(self, prompt_tokens: List[int]):
         self.beams: List[BeamSearchSequence] = [
-            BeamSearchSequence(tokens=prompt_tokens, logprobs=[])
+            BeamSearchSequence(tokens=prompt_tokens)
         ]
         self.completed: List[BeamSearchSequence] = []
 

@@ -63,7 +63,7 @@ class MistralToolParser(ToolParser):
         self.bot_token = "[TOOL_CALLS]"
         self.bot_token_id = self.vocab.get(self.bot_token)
         self.tool_call_regex = re.compile(r"\[{.*?}\]", re.DOTALL)
-        if self.bot_token_id is None:
+        if not self.bot_token_id:
             raise RuntimeError(
                 "Mistral Tool Parser could not locate the tool call token in "
                 "the tokenizer!")

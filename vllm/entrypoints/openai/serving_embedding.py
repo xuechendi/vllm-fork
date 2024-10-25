@@ -83,8 +83,7 @@ class OpenAIServingEmbedding(OpenAIServing):
                          lora_modules=None,
                          prompt_adapters=None,
                          request_logger=request_logger)
-        self._enabled = self._check_embedding_mode(
-            model_config.task == "embedding")
+        self._enabled = self._check_embedding_mode(model_config.embedding_mode)
 
     async def create_embedding(
         self,

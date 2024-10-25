@@ -20,7 +20,7 @@ class PlaceholderAttentionBackend(AttentionBackend):
 
     @staticmethod
     def get_name() -> str:
-        return "NO_ATTENTION"
+        return "placeholder-attn"
 
     @staticmethod
     def get_impl_cls() -> Type["PlaceholderAttentionImpl"]:

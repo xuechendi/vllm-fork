@@ -1,8 +1,8 @@
 import enum
 import json
 from dataclasses import dataclass, field, fields
-from typing import (TYPE_CHECKING, Any, ClassVar, Dict, Final, List, Literal,
-                    Mapping, Optional, Set, Tuple, Type, Union)
+from typing import (TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping,
+                    Optional, Tuple, Type, Union)
 
 import torch
 from transformers import PretrainedConfig
@@ -33,11 +33,6 @@ logger = init_logger(__name__)
 _EMBEDDING_MODEL_MAX_NUM_BATCHED_TOKENS = 32768
 _MULTIMODAL_MODEL_MAX_NUM_BATCHED_TOKENS = 5120
 
-TaskOption = Literal["auto", "generate", "embedding"]
-
-# "draft" is only used internally for speculative decoding
-_Task = Literal["generate", "embedding", "draft"]
-
 
 class ModelConfig:
     """Configuration for the model.
@@ -45,11 +40,7 @@ class ModelConfig:
     Args:
         model: Name or path of the huggingface model to use.
             It is also used as the content for `model_name` tag in metrics 
-            output when `served_model_name` is not specified.
-        task: The task to use the model for. Each vLLM instance only supports
-            one task, even if the same model can be used for multiple tasks.
-            When the model only supports one task, "auto" can be used to select
-            it; otherwise, you must specify explicitly which task to use.
+            output when `served_model_name` is not specified. 
         tokenizer: Name or path of the huggingface tokenizer to use.
         tokenizer_mode: Tokenizer mode. "auto" will use the fast tokenizer if
             available, "slow" will always use the slow tokenizer, and
@@ -117,7 +108,6 @@ class ModelConfig:
 
     def __init__(self,
                  model: str,
-                 task: Union[TaskOption, _Task],
                  tokenizer: str,
                  tokenizer_mode: str,
                  trust_remote_code: bool,
@@ -217,11 +207,7 @@ class ModelConfig:
 
         self.override_neuron_config = override_neuron_config if is_neuron(
         ) else None
-
-        supported_tasks, task = self._resolve_task(task, self.hf_config)
-        self.supported_tasks = supported_tasks
-        self.task: Final = task
-
+        self._verify_embedding_mode()
         self._verify_quantization()
         self._verify_cuda_graph()
         self._verify_bnb_config()
@@ -255,44 +241,18 @@ class ModelConfig:
                 "either 'auto', 'slow' or 'mistral'.")
         self.tokenizer_mode = tokenizer_mode
 
-    def _resolve_task(
-        self,
-        task_option: Union[TaskOption, _Task],
-        hf_config: PretrainedConfig,
-    ) -> Tuple[Set[_Task], _Task]:
-        if task_option == "draft":
-            return {"draft"}, "draft"
+    def _verify_embedding_mode(self) -> None:
+        architectures = getattr(self.hf_config, "architectures", [])
 
-        architectures = getattr(hf_config, "architectures", [])
-
-        task_support: Dict[_Task, bool] = {
-            # NOTE: Listed from highest to lowest priority,
-            # in case the model supports multiple of them
-            "generate": ModelRegistry.is_text_generation_model(architectures),
-            "embedding": ModelRegistry.is_embedding_model(architectures),
-        }
-        supported_tasks_lst: List[_Task] = [
-            task for task, is_supported in task_support.items() if is_supported
-        ]
-        supported_tasks = set(supported_tasks_lst)
-
-        if task_option == "auto":
-            selected_task = next(iter(supported_tasks_lst))
-
-            if len(supported_tasks) > 1:
-                logger.info(
-                    "This model supports multiple tasks: %s. "
-                    "Defaulting to '%s'.", supported_tasks, selected_task)
+        # TODO: Allow the same model architecture to be specified as either
+        # generation or embedding model
+        if "Phi3VForCausalLM" in architectures:
+            # Match both remote and local names
+            embedding_mode = "/VLM2Vec" in self.model
         else:
-            if task_option not in supported_tasks:
-                msg = (
-                    f"This model does not support the '{task_option}' task. "
-                    f"Supported tasks: {supported_tasks}")
-                raise ValueError(msg)
+            embedding_mode = ModelRegistry.is_embedding_model(architectures)
 
-            selected_task = task_option
-
-        return supported_tasks, selected_task
+        self.embedding_mode = embedding_mode
 
     def _parse_quant_hf_config(self):
         quant_cfg = getattr(self.hf_config, "quantization_config", None)
@@ -441,7 +401,7 @@ class ModelConfig:
 
         # Async postprocessor is not necessary with embedding mode
         # since there is no token generation
-        if self.task == "embedding":
+        if self.embedding_mode:
             self.use_async_output_proc = False
 
         # Reminder: Please update docs/source/serving/compatibility_matrix.rst
@@ -621,6 +581,11 @@ class ModelConfig:
         return getattr(self.hf_config, "is_encoder_decoder", False) or (
             (hasattr(self.hf_config, "text_config") and getattr(
                 self.hf_config.text_config, "is_encoder_decoder", False)))
+
+    @property
+    def is_embedding_model(self) -> bool:
+        """Extract the embedding model flag."""
+        return self.embedding_mode
 
     @property
     def is_multimodal_model(self) -> bool:
@@ -978,7 +943,6 @@ class SchedulerConfig:
     """Scheduler configuration.
 
     Args:
-        task: The task to use the model for.
         max_num_batched_tokens: Maximum number of tokens to be processed in
             a single iteration.
         max_num_seqs: Maximum number of sequences to be processed in a single
@@ -993,6 +957,7 @@ class SchedulerConfig:
             prompt latency) before scheduling next prompt.
         enable_chunked_prefill: If True, prefill requests can be chunked based
             on the remaining max_num_batched_tokens.
+        embedding_mode: Whether the running model is for embedding.
         preemption_mode: Whether to perform preemption by swapping or 
             recomputation. If not specified, we determine the mode as follows:
             We use recomputation by default since it incurs lower overhead than
@@ -1007,13 +972,13 @@ class SchedulerConfig:
     """
 
     def __init__(self,
-                 task: _Task,
                  max_num_batched_tokens: Optional[int],
                  max_num_seqs: int,
                  max_model_len: int,
                  num_lookahead_slots: int = 0,
                  delay_factor: float = 0.0,
                  enable_chunked_prefill: bool = False,
+                 embedding_mode: bool = False,
                  is_multimodal_model: bool = False,
                  preemption_mode: Optional[str] = None,
                  num_scheduler_steps: int = 1,
@@ -1037,7 +1002,7 @@ class SchedulerConfig:
                 # for higher throughput.
                 max_num_batched_tokens = max(max_model_len, 2048)
 
-            if task == "embedding":
+            if embedding_mode:
                 # For embedding, choose specific value for higher throughput
                 max_num_batched_tokens = max(
                     max_num_batched_tokens,
@@ -1057,12 +1022,12 @@ class SchedulerConfig:
                 "Chunked prefill is enabled with max_num_batched_tokens=%d.",
                 self.max_num_batched_tokens)
 
-        self.task: Final = task
         self.max_num_seqs = max_num_seqs
         self.max_model_len = max_model_len
         self.num_lookahead_slots = num_lookahead_slots
         self.delay_factor = delay_factor
         self.chunked_prefill_enabled = enable_chunked_prefill
+        self.embedding_mode = embedding_mode
         self.preemption_mode = preemption_mode
         self.num_scheduler_steps = num_scheduler_steps
         self.multi_step_stream_outputs = multi_step_stream_outputs
@@ -1274,7 +1239,6 @@ class SpeculativeConfig:
             ngram_prompt_lookup_min = 0
             draft_model_config = ModelConfig(
                 model=speculative_model,
-                task="draft",
                 tokenizer=target_model_config.tokenizer,
                 tokenizer_mode=target_model_config.tokenizer_mode,
                 trust_remote_code=target_model_config.trust_remote_code,
@@ -1881,19 +1845,19 @@ class ObservabilityConfig:
     # If set, collects the model execute time for the request.
     collect_model_execute_time: bool = False
 
-    def __post_init__(self):
-        if not is_otel_available() and self.otlp_traces_endpoint is not None:
-            raise ValueError(
-                "OpenTelemetry is not available. Unable to configure "
-                "'otlp_traces_endpoint'. Ensure OpenTelemetry packages are "
-                f"installed. Original error:\n{otel_import_error_traceback}")
+    # def __post_init__(self):
+    #     if not is_otel_available() and self.otlp_traces_endpoint is not None:
+    #         raise ValueError(
+    #             "OpenTelemetry is not available. Unable to configure "
+    #             "'otlp_traces_endpoint'. Ensure OpenTelemetry packages are "
+    #             f"installed. Original error:\n{otel_import_error_traceback}")
 
-        if ((self.collect_model_forward_time
-             or self.collect_model_execute_time)
-                and self.otlp_traces_endpoint is None):
-            raise ValueError(
-                "collect_model_forward_time or collect_model_execute_time "
-                "requires --otlp-traces-endpoint to be set.")
+    #     if ((self.collect_model_forward_time
+    #          or self.collect_model_execute_time)
+    #             and self.otlp_traces_endpoint is None):
+    #         raise ValueError(
+    #             "collect_model_forward_time or collect_model_execute_time "
+    #             "requires --otlp-traces-endpoint to be set.")
 
 
 @dataclass(frozen=True)

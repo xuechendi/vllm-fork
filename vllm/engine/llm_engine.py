@@ -1,5 +1,4 @@
 import time
-from collections import Counter as collectionsCounter
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -345,7 +344,7 @@ class LLMEngine:
             observability_config=self.observability_config,
         )
 
-        if self.model_config.task != "embedding":
+        if not self.model_config.embedding_mode:
             self._initialize_kv_caches()
 
         # If usage stat is enabled, collect relevant info.
@@ -1117,7 +1116,7 @@ class LLMEngine:
                             seq_group.metrics.model_execute_time = (
                                 o.model_execute_time)
 
-            if self.model_config.task == "embedding":
+            if self.model_config.embedding_mode:
                 self._process_sequence_group_outputs(seq_group, output)
             else:
                 self.output_processor.process_prompt_logprob(seq_group, output)
@@ -1618,25 +1617,6 @@ class LLMEngine:
         n_requests: List[int] = []
         finished_reason_requests: List[str] = []
 
-        # Lora requests
-        running_lora_adapters = dict(
-            collectionsCounter([
-                running_request.lora_request.lora_name
-                for scheduler in self.scheduler
-                for running_request in scheduler.running
-                if running_request.lora_request
-            ]))
-        waiting_lora_adapters = dict(
-            collectionsCounter([
-                waiting_request.lora_request.lora_name
-                for scheduler in self.scheduler
-                for waiting_request in scheduler.waiting
-                if waiting_request.lora_request
-            ]))
-        max_lora_stat = "0"
-        if self.lora_config:
-            max_lora_stat = str(self.lora_config.max_loras)
-
         # NOTE: This loop assumes prefill seq_groups are before
         # decode seq_groups in scheduled_seq_groups.
         if scheduler_outputs is not None:
@@ -1758,9 +1738,7 @@ class LLMEngine:
             num_generation_tokens_requests=num_generation_tokens_requests,
             n_requests=n_requests,
             finished_reason_requests=finished_reason_requests,
-            max_lora=str(max_lora_stat),
-            waiting_lora_adapters=list(waiting_lora_adapters.keys()),
-            running_lora_adapters=list(running_lora_adapters.keys()))
+        )
 
     def add_lora(self, lora_request: LoRARequest) -> bool:
         return self.model_executor.add_lora(lora_request)
@@ -1876,6 +1854,9 @@ class LLMEngine:
 
     def is_encoder_decoder_model(self):
         return self.input_preprocessor.is_encoder_decoder_model()
+
+    def is_embedding_model(self):
+        return self.model_config.is_embedding_model
 
     def _validate_model_inputs(self, inputs: Union[DecoderOnlyInputs,
                                                    EncoderDecoderInputs]):

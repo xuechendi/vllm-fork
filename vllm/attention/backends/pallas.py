@@ -12,10 +12,6 @@ from vllm.attention.backends.utils import CommonAttentionState
 class PallasAttentionBackend(AttentionBackend):
 
     @staticmethod
-    def get_name() -> str:
-        return "PALLAS"
-
-    @staticmethod
     def get_impl_cls() -> Type["PallasAttentionBackendImpl"]:
         return PallasAttentionBackendImpl
 

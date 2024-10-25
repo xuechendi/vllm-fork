@@ -59,7 +59,7 @@ class EngineClient(ABC):
 
     async def beam_search(
         self,
-        prompt: Union[str, List[int]],
+        prompt: Union[PromptType, List[int]],
         request_id: str,
         params: BeamSearchParams,
     ) -> AsyncGenerator[RequestOutput, None]:
@@ -71,13 +71,9 @@ class EngineClient(ABC):
         length_penalty = params.length_penalty
 
         tokenizer = await self.get_tokenizer(lora_request=None)
-        if isinstance(prompt, str):
-            tokenized_prompt = tokenizer.encode(prompt)
-            prompt_text = prompt
-        else:
-            tokenized_prompt = prompt
-            prompt_text = None
-        tokenized_length = len(tokenized_prompt)
+        tokenizedPrompt = prompt if isinstance(
+            prompt, list) else tokenizer.encode(prompt)
+        tokenizedLength = len(tokenizedPrompt)
 
         sort_beams_key = create_sort_beams_key_function(
             tokenizer.eos_token_id, length_penalty)
@@ -85,11 +81,7 @@ class EngineClient(ABC):
         beam_search_params = SamplingParams(logprobs=2 * beam_width,
                                             max_tokens=1,
                                             temperature=temperature)
-        all_beams = [
-            BeamSearchSequence(tokens=tokenized_prompt,
-                               logprobs=[],
-                               cum_logprob=0)
-        ]
+        all_beams = [BeamSearchSequence(tokens=tokenizedPrompt, cum_logprob=0)]
         completed = []
 
         for _ in range(max_tokens):
@@ -122,7 +114,6 @@ class EngineClient(ABC):
                     for token_id, logprob_obj in logprobs.items():
                         new_beam = BeamSearchSequence(
                             tokens=current_beam.tokens + [token_id],
-                            logprobs=current_beam.logprobs + [logprobs],
                             cum_logprob=current_beam.cum_logprob +
                             logprob_obj.logprob)
 
@@ -140,22 +131,22 @@ class EngineClient(ABC):
         best_beams = sorted_completed[:beam_width]
 
         for beam in best_beams:
-            beam.text = tokenizer.decode(beam.tokens[tokenized_length:])
+            beam.text = tokenizer.decode(beam.tokens[tokenizedLength:])
 
         beam_search_output = RequestOutput(
             request_id=request_id,
-            prompt=prompt_text,
+            prompt=prompt,
             outputs=[
                 CompletionOutput(
                     text=beam.text,
                     cumulative_logprob=beam.cum_logprob,
-                    token_ids=beam.tokens[tokenized_length:],
+                    token_ids=beam.tokens,
                     index=i,
-                    logprobs=beam.logprobs,
+                    logprobs=beam.cum_logprob,
                 ) for (i, beam) in enumerate(best_beams)
             ],
             finished=True,
-            prompt_token_ids=tokenized_prompt,
+            prompt_token_ids=tokenizedPrompt,
             prompt_logprobs=None)
 
         yield beam_search_output

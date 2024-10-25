@@ -53,8 +53,7 @@ class Hermes2ProToolParser(ToolParser):
         self.tool_call_start_token_id = self.vocab.get(
             self.tool_call_start_token)
         self.tool_call_end_token_id = self.vocab.get(self.tool_call_end_token)
-        if (self.tool_call_start_token_id is None
-                or self.tool_call_end_token_id is None):
+        if not self.tool_call_start_token_id or not self.tool_call_end_token_id:
             raise RuntimeError(
                 "Hermes 2 Pro Tool parser could not locate tool call start/end "
                 "tokens in the tokenizer!")
