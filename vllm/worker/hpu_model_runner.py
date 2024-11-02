@@ -2110,6 +2110,18 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                 sampling_metadata.skip_sampler_cpu_output = True
                 self.model.model.sampler.include_gpu_probs_tensor = True
             cache_orig_output_tokens_len: List[Dict] = []
+
+            def try_revert_dummy_output_tokens():
+                if len(cache_orig_output_tokens_len) > 0:
+                    # Reuse the original output token ids length
+                    for i, seq_group_metadata in enumerate(
+                            seq_group_metadata_list):
+                        for j, data in seq_group_metadata.seq_data.items():
+                            orig_output_tokens_len = \
+                                cache_orig_output_tokens_len[i][j]
+                            data.output_token_ids = \
+                                data.output_token_ids[:orig_output_tokens_len]
+
             for i in range(num_steps):
                 with self.profiler.record_event('internal', model_event_name):
                     hidden_states = self.model.forward(
@@ -2179,6 +2191,7 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                                 if num_steps == 1:
                                     return [output]
                                 else:
+                                    try_revert_dummy_output_tokens()
                                     return []
 
                     result = self._prepare_decode(seq_group_metadata_list,
@@ -2192,15 +2205,7 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                         self.trim_attn_metadata(result.attn_metadata)
                     })
                 else:
-                    if len(cache_orig_output_tokens_len) > 0:
-                        # Reuse the original output token ids
-                        for i, seq_group_metadata in enumerate(
-                                seq_group_metadata_list):
-                            for j, data in seq_group_metadata.seq_data.items():
-                                orig_output_tokens_len = \
-                                    cache_orig_output_tokens_len[i][j]
-                                data.output_token_ids = \
-                                    data.output_token_ids[:orig_output_tokens_len]
+                    try_revert_dummy_output_tokens()
 
             if self.is_driver_worker and self.profiler.enabled:
                 # Stop recording 'execute_model' event
