@@ -2125,6 +2125,12 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                                 cache_orig_output_tokens_len[i][j]
                             data.output_token_ids = \
                                 data.output_token_ids[:orig_output_tokens_len]
+            def record_time(start):
+                if not is_prompt:
+                    #htorch.hpu.synchronize()
+                    if batch_size not in self.sampling_time:
+                        self.sampling_time[batch_size] = []
+                    self.sampling_time[batch_size].append(time.perf_counter() - start)
 
             for i in range(num_steps):
                 start = time.perf_counter()
@@ -2172,50 +2178,49 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                         self.cached_step_outputs.append(output)
                 htorch.core.mark_step()
                 if i < num_steps - 1:
-                    if i == 0:
-                        ctx = model_input.async_callback.keywords[  # type: ignore
-                            "ctx"]
-                        seq_group_metadata_list = ctx.seq_group_metadata_list
-                        # Cache the original output token ids
-                        for i, seq_group_metadata in enumerate(
-                                seq_group_metadata_list):
-                            cache_orig_output_tokens_len.append({})
-                            for j, data in seq_group_metadata.seq_data.items():
-                                cache_orig_output_tokens_len[i][j] = \
-                                    len(data.output_token_ids)
-                    for seq_group_metadata in seq_group_metadata_list:
-                        for data in seq_group_metadata.seq_data.values():
-                            max_output_len = sampling_metadata.seq_groups[
-                                0].sampling_params.max_tokens
-                            if len(data.output_token_ids) < max_output_len - 1:
-                                # add a place holder for prepare_decode
-                                # arbitrary value, this could be any token
-                                dummy_token = (540, )
-                                data.output_token_ids += (dummy_token)
-                            else:
-                                if num_steps == 1:
-                                    return [output]
+                    with self.profiler.record_event('internal', "multistep_in_middle_dataproc"):
+                        if i == 0:
+                            ctx = model_input.async_callback.keywords[  # type: ignore
+                                "ctx"]
+                            seq_group_metadata_list = ctx.seq_group_metadata_list
+                            # Cache the original output token ids
+                            for i, seq_group_metadata in enumerate(
+                                    seq_group_metadata_list):
+                                cache_orig_output_tokens_len.append({})
+                                for j, data in seq_group_metadata.seq_data.items():
+                                    cache_orig_output_tokens_len[i][j] = \
+                                        len(data.output_token_ids)
+                        for seq_group_metadata in seq_group_metadata_list:
+                            for data in seq_group_metadata.seq_data.values():
+                                max_output_len = sampling_metadata.seq_groups[
+                                    0].sampling_params.max_tokens
+                                if len(data.output_token_ids) < max_output_len - 1:
+                                    # add a place holder for prepare_decode
+                                    # arbitrary value, this could be any token
+                                    dummy_token = (540, )
+                                    data.output_token_ids += (dummy_token)
                                 else:
-                                    try_revert_dummy_output_tokens()
-                                    return []
+                                    if num_steps == 1:
+                                        return [output]
+                                    else:
+                                        try_revert_dummy_output_tokens()
+                                        record_time(start)
+                                        return []
 
-                    result = self._prepare_decode(seq_group_metadata_list,
-                                                  output=output)
-                    execute_model_kwargs.update({
-                        "input_ids":
-                        result.input_tokens,
-                        "positions":
-                        result.input_positions,
-                        "attn_metadata":
-                        self.trim_attn_metadata(result.attn_metadata)
-                    })
+                        result = self._prepare_decode(seq_group_metadata_list,
+                                                    output=output)
+                        execute_model_kwargs.update({
+                            "input_ids":
+                            result.input_tokens,
+                            "positions":
+                            result.input_positions,
+                            "attn_metadata":
+                            self.trim_attn_metadata(result.attn_metadata)
+                        })
                 else:
-                    try_revert_dummy_output_tokens()
-                if not is_prompt:
-                    #htorch.hpu.synchronize()
-                    if batch_size not in self.sampling_time:
-                        self.sampling_time[batch_size] = []
-                    self.sampling_time[batch_size].append(time.perf_counter() - start)
+                    with self.profiler.record_event('internal', "multistep_last_step_dataproc"):
+                        try_revert_dummy_output_tokens()
+                record_time(start)
 
             if self.is_driver_worker and self.profiler.enabled:
                 # Stop recording 'execute_model' event
