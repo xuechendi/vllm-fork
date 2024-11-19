@@ -412,22 +412,27 @@ class BatchExpansionTop1Scorer(SpeculativeScorer):
         # and non spec sequences) and should be removed in the future. It can be
         # done by supporting per-sequence proposal lens.
         #
-        # First samples are non-speculative, latter samples are from speculative
-        # scoring (prefill|decode order).
-        split_sizes = (sampler_output.sampled_token_ids.numel() -
-                       num_scoring_tokens, num_scoring_tokens)
-        (non_spec_probs,
-         spec_probs) = sampler_output.sampled_token_probs.split(split_sizes)
-        (non_spec_sampled_tokens, spec_sampled_tokens
+        # First samples are from speculative scoring, latter samples are non-
+        # speculative samples.
+        split_sizes = (num_scoring_tokens,
+                       sampler_output.sampled_token_ids.numel() -
+                       num_scoring_tokens)
+        (spec_probs, non_spec_probs
+         ) = sampler_output.sampled_token_probs.split(split_sizes)
+        (spec_sampled_tokens, non_spec_sampled_tokens
          ) = sampler_output.sampled_token_ids.flatten().split(split_sizes)
-        (non_spec_logprobs,
-         spec_logprobs) = sampler_output.logprobs.split(split_sizes)
+        (
+            spec_logprobs,
+            non_spec_logprobs,
+        ) = sampler_output.logprobs.split(split_sizes)
 
         if sampler_output.hidden_states is not None:
-            (non_spec_hidden_states, spec_hidden_states
-             ) = sampler_output.hidden_states.split(split_sizes)
+            (
+                spec_hidden_states,
+                non_spec_hidden_states,
+            ) = sampler_output.hidden_states.split(split_sizes)
         else:
-            non_spec_hidden_states, spec_hidden_states = None, None
+            spec_hidden_states, non_spec_hidden_states = None, None
 
         return (spec_sampled_tokens, spec_probs, spec_logprobs,
                 spec_hidden_states, non_spec_sampled_tokens, non_spec_probs,
