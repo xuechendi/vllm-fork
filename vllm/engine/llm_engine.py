@@ -229,6 +229,7 @@ class LLMEngine:
         input_registry: InputRegistry = INPUT_REGISTRY,
         mm_registry: MultiModalRegistry = MULTIMODAL_REGISTRY,
         use_cached_outputs: bool = False,
+        model: str=None,
     ) -> None:
 
         # TODO: remove the local variables and use self.* throughout the class.
