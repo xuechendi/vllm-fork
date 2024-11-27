@@ -71,6 +71,7 @@ class MMLLMEngine:
         kwargs['use_cached_outputs'] = True
         
         # get configs from args and kwargs, determine how many models to load
+
         original_vllm_config = kwargs.get('vllm_config')
         models_load = [model_config.model for model_config in original_vllm_config.model_configs ]
         self.engines  = []
@@ -79,6 +80,7 @@ class MMLLMEngine:
             vllm_config = copy.deepcopy(original_vllm_config)
             vllm_config.model_config = original_vllm_config.model_configs[i]
             kwargs['vllm_config'] = vllm_config
+
             self.engines.append(LLMEngine(model=model, *args, **kwargs))
         self.log_requests = log_requests
 
