@@ -361,9 +361,7 @@ class MMLLMEngineClient(EngineClient):
     async def get_tokenizer(self, lora_request: Optional[LoRARequest] = None):
         return await self.tokenizer.get_lora_tokenizer_async(lora_request)
 
-    async def get_tokenizer_mm(self,
-                               model,
-                               lora_request: Optional[LoRARequest] = None):
+    async def get_tokenizer_mm(self, model, lora_request: Optional[LoRARequest] = None):
         for tokenizer in self.tokenizers:
             if tokenizer.tokenizer_id == model:
                 return await tokenizer.get_lora_tokenizer_async(lora_request)
@@ -498,8 +496,8 @@ class MMLLMEngineClient(EngineClient):
         assert (prompt is not None and sampling_params is not None
                 and request_id is not None)
 
-        return self._process_request(prompt, sampling_params, request_id,
-                                     model, lora_request, trace_headers,
+        return self._process_request(prompt, sampling_params, request_id, model,
+                                     lora_request, trace_headers,
                                      prompt_adapter_request, priority)
 
     @overload  # DEPRECATED

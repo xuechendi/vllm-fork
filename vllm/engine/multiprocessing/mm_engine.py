@@ -69,15 +69,12 @@ class MMLLMEngine:
         # output is immediately pickled and send over the socket, which frees
         # the python object to be reused again.
         kwargs['use_cached_outputs'] = True
-
+        
         # get configs from args and kwargs, determine how many models to load
         original_vllm_config = kwargs.get('vllm_config')
-        models_load = [
-            model_config.model
-            for model_config in original_vllm_config.model_configs
-        ]
-        self.engines = []
-
+        models_load = [model_config.model for model_config in original_vllm_config.model_configs ]
+        self.engines  = []
+        
         for i, model in enumerate(models_load):
             vllm_config = copy.deepcopy(original_vllm_config)
             vllm_config.model_config = original_vllm_config.model_configs[i]
@@ -195,8 +192,7 @@ class MMLLMEngine:
         """Core busy loop of the LLMEngine."""
 
         while True:
-            if not any(engine.has_unfinished_requests()
-                       for engine in self.engines):
+            if not any(engine.has_unfinished_requests() for engine in self.engines):
                 # Poll until there is work to do.
                 while self.input_socket.poll(timeout=POLLING_TIMEOUT_MS) == 0:
                     # When there's no work, check on engine health and send
