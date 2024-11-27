@@ -903,10 +903,10 @@ class EngineArgs:
         engine_args = cls(**{attr: getattr(args, attr) for attr in attrs})
         return engine_args
 
-    def create_model_configs(self)-> list[ModelConfig]:
+    def create_model_configs(self) -> list[ModelConfig]:
         return [self.create_model_config(model) for model in self.models]
 
-    def create_model_config(self, model:str = None) -> ModelConfig:
+    def create_model_config(self, model: str = None) -> ModelConfig:
         return ModelConfig(
             model=model if model is not None else self.model,
             task=self.task,
