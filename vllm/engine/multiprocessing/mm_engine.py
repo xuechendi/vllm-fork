@@ -5,6 +5,7 @@ from typing import Iterator, List, Optional, Union
 
 import cloudpickle
 import zmq
+import copy
 
 from vllm import SamplingParams
 from vllm.engine.mm_arg_utils import AsyncEngineArgs
@@ -70,12 +71,14 @@ class MMLLMEngine:
         kwargs['use_cached_outputs'] = True
         
         # get configs from args and kwargs, determine how many models to load
-        vllm_config = kwargs.get('vllm_config')
-        models_load = [model_config.model for model_config in vllm_config.model_configs ]
+        original_vllm_config = kwargs.get('vllm_config')
+        models_load = [model_config.model for model_config in original_vllm_config.model_configs ]
         self.engines  = []
         
         for i, model in enumerate(models_load):
-            vllm_config.model_config = vllm_config.model_configs[i]
+            vllm_config = copy.deepcopy(original_vllm_config)
+            vllm_config.model_config = original_vllm_config.model_configs[i]
+            kwargs['vllm_config'] = vllm_config
             self.engines.append(LLMEngine(model=model, *args, **kwargs))
         self.log_requests = log_requests
 
