@@ -32,7 +32,7 @@ from vllm.engine.protocol import EngineClient
 from vllm.entrypoints.chat_utils import load_chat_template
 from vllm.entrypoints.launcher import serve_http
 from vllm.entrypoints.logger import RequestLogger
-from vllm.entrypoints.openai.cli_args import (make_arg_parser,
+from vllm.entrypoints.openai.cli_args import (make_mm_arg_parser,
                                               validate_parsed_serve_args)
 # yapf conflicts with isort for this block
 # yapf: disable
@@ -642,7 +642,7 @@ if __name__ == "__main__":
     # This section should be in sync with vllm/scripts.py for CLI entrypoints.
     parser = FlexibleArgumentParser(
         description="vLLM OpenAI-Compatible RESTful API server.")
-    parser = make_arg_parser(parser)
+    parser = make_mm_arg_parser(parser)
     args = parser.parse_args()
     validate_parsed_serve_args(args)
 
