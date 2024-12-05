@@ -22,6 +22,7 @@
 # limitations under the License.
 """Inference-only LLaMA model compatible with HuggingFace weights."""
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type, Union
+import os
 
 import torch
 from torch import nn
@@ -70,6 +71,8 @@ class LlamaMLP(nn.Module):
         quant_config: Optional[QuantizationConfig] = None,
         bias: bool = False,
         prefix: str = "",
+        do_split: bool = False,
+        split_size: int = 2
     ) -> None:
         super().__init__()
         self.gate_up_proj = MergedColumnParallelLinear(
@@ -85,6 +88,8 @@ class LlamaMLP(nn.Module):
             bias=bias,
             quant_config=quant_config,
             prefix=f"{prefix}.down_proj",
+            do_split=do_split,
+            split_size=split_size
         )
         if hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {hidden_act}. "
@@ -113,6 +118,8 @@ class LlamaAttention(nn.Module):
         bias: bool = False,
         cache_config: Optional[CacheConfig] = None,
         prefix: str = "",
+        do_split: bool = False,
+        split_size: int = 2
     ) -> None:
         super().__init__()
         layer_idx = extract_layer_index(prefix)
@@ -156,6 +163,8 @@ class LlamaAttention(nn.Module):
             bias=bias,
             quant_config=quant_config,
             prefix=f"{prefix}.o_proj",
+            do_split=do_split,
+            split_size=split_size,
         )
 
         is_neox_style = True
@@ -231,6 +240,10 @@ class LlamaDecoderLayer(nn.Module):
         # Support internlm/internlm-7b with bias
         attention_bias = getattr(config, "attention_bias", False) or getattr(
             config, "bias", False)
+
+        split_size = int(os.environ.get('VLLM_TP_SPLIT_SIZE_BY_SEQ', '1'))
+        enable_o_proj_split = int(os.environ.get('VLLM_TP_O_PROJ_SPLIT_ENABLE', '1')) == 1
+        do_split = split_size > 1
         self.self_attn = LlamaAttention(
             config=config,
             hidden_size=self.hidden_size,
@@ -244,6 +257,8 @@ class LlamaDecoderLayer(nn.Module):
             bias=attention_bias,
             cache_config=cache_config,
             prefix=f"{prefix}.self_attn",
+            do_split=do_split and enable_o_proj_split,
+            split_size=split_size,
         )
         self.mlp = LlamaMLP(
             hidden_size=self.hidden_size,
@@ -252,6 +267,8 @@ class LlamaDecoderLayer(nn.Module):
             quant_config=quant_config,
             bias=getattr(config, "mlp_bias", False),
             prefix=f"{prefix}.mlp",
+            do_split=do_split,
+            split_size=split_size
         )
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        eps=config.rms_norm_eps)

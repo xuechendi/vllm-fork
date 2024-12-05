@@ -9,6 +9,7 @@ from torch.nn.parameter import Parameter, UninitializedParameter
 from vllm.distributed import (divide, get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size,
                               split_tensor_along_last_dim,
+                              split_tensor_along_x_dim,
                               tensor_model_parallel_all_gather,
                               tensor_model_parallel_all_reduce)
 from vllm.logger import init_logger
@@ -996,13 +997,20 @@ class RowParallelLinear(LinearBase):
                  params_dtype: Optional[torch.dtype] = None,
                  reduce_results: bool = True,
                  quant_config: Optional[QuantizationConfig] = None,
-                 prefix: str = ""):
+                 prefix: str = "",
+                 do_split: bool=False, # should enable for donw_proj, disable for o_proj
+                 split_threshold:int = 128,
+                 split_size:int = 2):
         super().__init__(input_size, output_size, skip_bias_add, params_dtype,
                          quant_config, prefix)
 
         self.input_is_parallel = input_is_parallel
         self.reduce_results = reduce_results
         self.collective_func = tensor_model_parallel_all_reduce
+        self.do_split = do_split
+        self.split_threshold = split_threshold
+        self.split_size = split_size
+        self.prefix = prefix
 
         # Divide the weight matrix along the last dimension.
         self.tp_rank = get_tensor_model_parallel_rank()
@@ -1099,13 +1107,69 @@ class RowParallelLinear(LinearBase):
         # Only fuse bias add into GEMM for rank 0 (this ensures that
         # bias will not get added more than once in TP>1 case)
         bias_ = None if (self.tp_rank > 0 or self.skip_bias_add) else self.bias
-        output_parallel = self.quant_method.apply(self,
+
+        # print(input_parallel.shape) # [batch_size, seq_lens, hidden_size//tp_size]
+
+        # split v2:
+        # stretage: we split the input tensor on 1 dim(seq length dim), but only when seq_length greater
+        # than a threshold, otherwise we dont split. which means, decode phase will never split 
+        # why split on 1st dim:
+        # the 0th dim is batch size, when batch size = 1, we can not split anyway.
+        # 2nd dim(hidden_size): tp already split on this dim, will change much more if split on this
+        
+        _, seq_len, _ = input_parallel.shape
+        shape_total = input_parallel.shape[0] * input_parallel.shape[1] * input_parallel.shape[2]
+        do_split = self.do_split and seq_len > 1 # split decode
+        # NOTE: we found split tensor when it is too small is not helping with the performance.
+        # 1 * 1024 * 4096 * 3 is [batch_size, seq_len, hidden_size * 3]
+        do_split = do_split and shape_total >  1 * 1024 * 4096 * 3
+
+        if do_split:
+            input_parallels = split_tensor_along_x_dim(input_parallel, 1, self.split_size)
+            output_parallels = []
+            for input_parallel in input_parallels:
+                output_parallel = self.quant_method.apply(self,
+                                                      input_parallel,
+                                                      bias=bias_)
+                if self.reduce_results and self.tp_size > 1:
+                    output = tensor_model_parallel_all_reduce(output_parallel)
+                else:
+                    output = output_parallel
+                output_parallels.append(output)
+            output = torch.cat(output_parallels, dim=1)
+        
+        else:
+            output_parallel = self.quant_method.apply(self,
                                                   input_parallel,
                                                   bias=bias_)
-        if self.reduce_results and self.tp_size > 1:
-            output = tensor_model_parallel_all_reduce(output_parallel)
-        else:
-            output = output_parallel
+            if self.reduce_results and self.tp_size > 1:
+                output = tensor_model_parallel_all_reduce(output_parallel)
+            else:
+                output = output_parallel
+        
+
+        # split v1:        
+        # why split on 0th dim:
+        # 1st dim(seq_lens): due to decode phase seq_lens is always 1, so we can not split on this dim
+        # 2nd dim(hidden_size): tp already split on this dim, will change much more if split on this
+        # Other limitations & FIXME: need to set VLLM_DECODE_BS_BUCKET_MIN=2, VLLM_PROMPT_BS_BUCKET_MIN=2, otherwise it cannot divide and split.
+        # Overheads:
+        # 1. split overhead.
+        # 2. append may have some overhead, I am not sure whether the output tensor need ready.
+        # 3. cat tensor overhead. we can do some optimization here. but I am afraid there will always be some copy.
+        # split = 2
+        # input_parallels = split_tensor_along_x_dim(input_parallel, 0, split)
+        # output_parallels = []
+        # for input_parallel in input_parallels:
+        #     output_parallel = self.quant_method.apply(self,
+        #                                               input_parallel,
+        #                                               bias=bias_)
+        #     if self.reduce_results and self.tp_size > 1:
+        #         output = tensor_model_parallel_all_reduce(output_parallel)
+        #     else:
+        #         output = output_parallel
+        #     output_parallels.append(output)
+        # output = torch.cat(output_parallels, dim=0)
 
         output_bias = self.bias if self.skip_bias_add else None
 
