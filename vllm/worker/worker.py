@@ -216,10 +216,7 @@ class Worker(LocalOrDistributedWorkerBase):
         if non_torch_allocations > 0:
             peak_memory += non_torch_allocations
 
-        available_kv_cache_memory = (
-            total_gpu_memory * self.cache_config.gpu_memory_utilization -
-            peak_memory)
-
+        available_kv_cache_memory = total_gpu_memory * self.cache_config.gpu_memory_utilization
         # Calculate the number of blocks that can be allocated with the
         # profiled peak memory.
         cache_block_size = self.get_cache_block_size_bytes()
