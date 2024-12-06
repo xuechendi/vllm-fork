@@ -21,6 +21,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Inference-only LLaMA model compatible with HuggingFace weights."""
+import os
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 import torch
@@ -185,11 +186,12 @@ class LlamaAttention(nn.Module):
         hidden_states: torch.Tensor,
         kv_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
+        **kwargs,
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q, k = self.rotary_emb(positions, q, k)
-        attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
+        attn_output = self.attn(q, k, v, kv_cache, attn_metadata, **kwargs)
         output, _ = self.o_proj(attn_output)
         return output
 
@@ -204,7 +206,10 @@ class LlamaDecoderLayer(nn.Module):
         prefix: str = "",
     ) -> None:
         super().__init__()
+        self.tp_parallel_size = int(os.environ.get("TP_PARALLEL_SIZE", 1))
+        self.layer_idx = int(prefix.split('.')[2])
         self.hidden_size = config.hidden_size
+        self.total_num_layers = 32
         rope_theta = getattr(config, "rope_theta", 10000)
         rope_scaling = getattr(config, "rope_scaling", None)
         if rope_scaling is not None and getattr(
@@ -244,6 +249,9 @@ class LlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.hidden_size,
                                                 eps=config.rms_norm_eps)
 
+    def set_total_num_layers(self, total_num_layers: int) -> None:
+        self.total_num_layers = total_num_layers
+
     def forward(
         self,
         positions: torch.Tensor,
@@ -252,22 +260,101 @@ class LlamaDecoderLayer(nn.Module):
         attn_metadata: AttentionMetadata,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Self Attention
-        if residual is None:
-            residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
-        else:
-            hidden_states, residual = self.input_layernorm(
-                hidden_states, residual)
-        hidden_states = self.self_attn(positions=positions,
-                                       hidden_states=hidden_states,
-                                       kv_cache=kv_cache,
-                                       attn_metadata=attn_metadata)
+        if not attn_metadata.is_prompt or self.tp_parallel_size == 1:
+            # Self Attention
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(
+                    hidden_states, residual)
+            hidden_states = self.self_attn(positions=positions,
+                                           hidden_states=hidden_states,
+                                           kv_cache=kv_cache,
+                                           attn_metadata=attn_metadata)
 
-        # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
+            # Fully Connected
+            hidden_states, residual = self.post_attention_layernorm(
+                hidden_states, residual)
+            hidden_states = self.mlp(hidden_states)
+        else:
+            hidden_states, residual = self.try_split_forward(
+                positions, hidden_states, kv_cache, attn_metadata, residual)
+        return hidden_states, residual
+
+    def try_split_forward(
+        self,
+        positions: torch.Tensor,
+        hidden_states: torch.Tensor,
+        kv_cache: torch.Tensor,
+        attn_metadata: AttentionMetadata,
+        residual: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+
+        def split_tensor(tensor: torch.Tensor,
+                         num_partitions: int,
+                         dim: int = 0):
+            dim_size = tensor.size()[dim] // num_partitions
+            tensor_list = torch.split(tensor, dim_size, dim=dim)
+            #tensor_list = tuple(chunk.contiguous() for chunk in tensor_list)
+            return tensor_list
+
+        split = self.tp_parallel_size
+        positions_list = split_tensor(positions, split, dim=0)
+        if self.layer_idx == 0:
+            hidden_states_list = split_tensor(hidden_states, split, dim=0)
+            residual_list = [None
+                             ] * split if residual is None else split_tensor(
+                                 residual, split, dim=0)
+        else:
+            hidden_states_list = hidden_states
+            residual_list = residual
+        res_hidden_states_list = [None] * split
+        res_residual_list = [None] * split
+        block_indices_list = split_tensor(
+            attn_metadata.block_indices, split
+        ) if attn_metadata.block_indices is not None else [None] * split
+        block_offsets_list = split_tensor(
+            attn_metadata.block_offsets, split
+        ) if attn_metadata.block_offsets is not None else [None] * split
+        seq_lens_tensor_list = split_tensor(
+            attn_metadata.seq_lens_tensor, split
+        ) if attn_metadata.seq_lens_tensor is not None else [None] * split
+        attn_bias_list = split_tensor(
+            attn_metadata.attn_bias,
+            split) if attn_metadata.attn_bias is not None else [None] * split
+
+        for i in range(split):
+            if residual is None:
+                res_residual_list[i] = hidden_states_list[i]
+                res_hidden_states_list[i] = self.input_layernorm(
+                    hidden_states_list[i])
+            else:
+                res_hidden_states_list[i], res_residual_list[
+                    i] = self.input_layernorm(hidden_states_list[i],
+                                              residual_list[i])
+            res_hidden_states_list[i] = self.self_attn(
+                positions=positions_list[i],
+                hidden_states=res_hidden_states_list[i],
+                kv_cache=kv_cache,
+                attn_metadata=attn_metadata,
+                block_indices=block_indices_list[i],
+                block_offsets=block_offsets_list[i],
+                seq_lens_tensor=seq_lens_tensor_list[i],
+                attn_bias=attn_bias_list[i])
+        for i in range(split):
+            res_hidden_states_list[i], res_residual_list[
+                i] = self.post_attention_layernorm(res_hidden_states_list[i],
+                                                   res_residual_list[i])
+            res_hidden_states_list[i] = self.mlp(res_hidden_states_list[i])
+
+        if self.layer_idx == (self.total_num_layers - 1):
+            hidden_states = torch.cat(res_hidden_states_list, dim=0)
+            residual = torch.cat(res_residual_list, dim=0)
+        else:
+            hidden_states = res_hidden_states_list
+            residual = res_residual_list
+
         return hidden_states, residual
 
 
@@ -306,6 +393,9 @@ class LlamaModel(nn.Module):
                                              prefix=prefix),
             prefix=f"{prefix}.layers",
         )
+        for layer in self.layers:
+            layer.set_total_num_layers(len(self.layers))
+
         if get_pp_group().is_last_rank:
             self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         else:
