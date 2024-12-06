@@ -128,37 +128,18 @@ class Attention(nn.Module):
         kv_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
         attn_type: str = AttentionType.DECODER,
+        **kwargs,
     ) -> torch.Tensor:
 
-        if self.use_direct_call:
-            return self.impl.forward(query,
-                                     key,
-                                     value,
-                                     kv_cache,
-                                     attn_metadata,
-                                     self._k_scale,
-                                     self._v_scale,
-                                     attn_type=attn_type)
-        elif self.use_output:
-            output = torch.empty_like(query)
-            hidden_size = query.size(-1)
-            # Reshape the query, key, and value tensors.
-            # NOTE(woosuk): We do this outside the custom op to minimize the
-            # CPU overheads from the non-CUDA-graph regions.
-            query = query.view(-1, self.num_heads, self.head_size)
-            output = output.view(-1, self.num_heads, self.head_size)
-            if key is not None:
-                key = key.view(-1, self.num_kv_heads, self.head_size)
-            if value is not None:
-                value = value.view(-1, self.num_kv_heads, self.head_size)
-            torch.ops.vllm.unified_attention_with_output(
-                query, key, value, output, kv_cache, attn_type,
-                self.layer_name)
-            return output.view(-1, hidden_size)
-        else:
-            return torch.ops.vllm.unified_attention(query, key, value,
-                                                    kv_cache, attn_type,
-                                                    self.layer_name)
+        return self.impl.forward(query,
+                                 key,
+                                 value,
+                                 kv_cache,
+                                 attn_metadata,
+                                 self._k_scale,
+                                 self._v_scale,
+                                 attn_type=attn_type,
+                                 **kwargs)
 
     def extra_repr(self) -> str:
         s = f"head_size={self.impl.head_size}"  # type: ignore
