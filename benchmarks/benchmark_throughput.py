@@ -6,6 +6,7 @@ import random
 import time
 from typing import List, Optional
 
+import pandas as pd
 import torch
 import uvloop
 from PIL import Image
@@ -202,16 +203,25 @@ async def run_vllm_async(
                     max_tokens=request.expected_output_len,
                 ))
 
-        generators = []
-        start = time.perf_counter()
-        for i, (prompt, sp) in enumerate(zip(prompts, sampling_params)):
-            generator = llm.generate(prompt, sp, request_id=f"test{i}")
-            generators.append(generator)
-        all_gens = merge_async_iterators(*generators)
-        async for i, res in all_gens:
-            pass
-        end = time.perf_counter()
-        return end - start
+        for _ in range(2):
+            generators = []
+            start_time = []
+            latencies = []
+            start = time.perf_counter()
+            for i, (prompt, sp) in enumerate(zip(prompts, sampling_params)):
+                generator = llm.generate(prompt, sp, request_id=f"test{i}")
+                generators.append(generator)
+                start_time.append(time.perf_counter())
+                latencies.append([])
+            all_gens = merge_async_iterators(*generators)
+            async for i, res in all_gens:
+                lat = time.perf_counter() - start_time[i]
+                latencies[i].append(lat)
+            end = time.perf_counter()
+            first_latency = pd.Series([lat[0] * 1000 for lat in latencies])
+            next_latency = pd.Series([(lat[-1] - lat[0]) / len(lat[1:]) * 1000
+                                    for lat in latencies])
+        return end - start, (first_latency, next_latency)
 
 
 def run_hf(
@@ -322,7 +332,7 @@ def main(args: argparse.Namespace):
                          for request in requests)
     if args.backend == "vllm":
         if args.async_engine:
-            elapsed_time = uvloop.run(
+            elapsed_time, (first_latency, next_latency) = uvloop.run(
                 run_vllm_async(
                     requests,
                     args.n,
@@ -332,6 +342,7 @@ def main(args: argparse.Namespace):
         else:
             elapsed_time = run_vllm(requests, args.n,
                                     EngineArgs.from_cli_args(args))
+            first_latency, next_latency = None, None
     elif args.backend == "hf":
         assert args.tensor_parallel_size == 1
         elapsed_time = run_hf(requests, args.model, tokenizer, args.n,
@@ -353,6 +364,12 @@ def main(args: argparse.Namespace):
     print(f"Throughput: {len(requests) / elapsed_time:.2f} requests/s, "
           f"{total_num_tokens / elapsed_time:.2f} total tokens/s, "
           f"{total_output_tokens / elapsed_time:.2f} output tokens/s")
+    if first_latency is not None:
+        latency_breakdown = "\nFirst token latency(msecs):\n"
+        latency_breakdown += f"{first_latency.describe()}"
+        latency_breakdown += "\nNext token latency(msecs):\n"
+        latency_breakdown += f"{next_latency.describe()}"
+    print(f"{latency_breakdown if first_latency is not None else ''}")
 
     # Output JSON results if specified
     if args.output_json:
