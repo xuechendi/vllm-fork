@@ -220,7 +220,7 @@ async def run_vllm_async(
             end = time.perf_counter()
             first_latency = pd.Series([lat[0] * 1000 for lat in latencies])
             next_latency = pd.Series([(lat[-1] - lat[0]) / len(lat[1:]) * 1000
-                                    for lat in latencies])
+                                      for lat in latencies])
         return end - start, (first_latency, next_latency)
 
 

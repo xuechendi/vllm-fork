@@ -260,7 +260,10 @@ class LlamaDecoderLayer(nn.Module):
         attn_metadata: AttentionMetadata,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if not attn_metadata.is_prompt or self.tp_parallel_size == 1:
+        skip_split = isinstance(hidden_states, torch.Tensor) \
+            and hidden_states.size()[0] == 1
+        if not attn_metadata.is_prompt or \
+            self.tp_parallel_size == 1 or skip_split:
             # Self Attention
             if residual is None:
                 residual = hidden_states
