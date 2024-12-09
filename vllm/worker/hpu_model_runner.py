@@ -279,25 +279,44 @@ class HpuModelAdapter:
         return metadata
 
     def _set_block_scales(self, metadata, device):
-        block_mapping = metadata.block_mapping
-        ones = torch.ones((block_mapping.size(0), ),
-                          device=device,
-                          dtype=block_mapping.dtype)
-        sums = batch2block(block2batch(ones, block_mapping), block_mapping)
-        block_scales = torch.reciprocal(torch.maximum(ones, sums))
-        metadata = metadata._replace(block_scales=block_scales)
+        if len(metadata.block_mapping.shape) == 1:
+            block_mapping = metadata.block_mapping
+            ones = torch.ones((block_mapping.size(0), ),
+                            device=device,
+                            dtype=block_mapping.dtype)
+            sums = batch2block(block2batch(ones, block_mapping), block_mapping)
+            block_scales = torch.reciprocal(torch.maximum(ones, sums))
+            metadata = metadata._replace(block_scales=block_scales)
+        else:
+            tp_parralel_size = metadata.block_mapping.shape[0]
+            block_scales = [None] * tp_parralel_size
+            for i in range(tp_parralel_size):
+                block_mapping = metadata.block_mapping[i]
+                ones = torch.ones((block_mapping.size(0), ),
+                                device=device,
+                                dtype=block_mapping.dtype)
+                sums = batch2block(block2batch(ones, block_mapping), block_mapping)
+                block_scales[i] = torch.reciprocal(torch.maximum(ones, sums))
+            metadata = metadata._replace(block_scales=torch.stack(block_scales))
         return metadata
 
     def _set_indices_and_offsets(self, metadata, block_size, is_prompt):
-        slot_mapping = metadata.slot_mapping.flatten()
+        if len(metadata.slot_mapping.shape) == 2:
+            flat_dim = 0
+        elif len(metadata.slot_mapping.shape) == 3:
+            flat_dim = 1
+        slot_mapping = torch.flatten(metadata.slot_mapping, start_dim=flat_dim)
         indices = torch.div(slot_mapping, block_size, rounding_mode="floor")
         if is_prompt:
-            indices = indices.unflatten(0, (-1, block_size))[:, 0]
+            if len(metadata.slot_mapping.shape) == 2:
+                indices = indices.unflatten(0, (-1, block_size))[:, 0]
+            elif len(metadata.slot_mapping.shape) == 3:
+                indices = indices.unflatten(1, (-1, block_size))[:, :, 0]
             offsets = None
         else:
             offsets = torch.fmod(slot_mapping, block_size)
         metadata = metadata._replace(block_offsets=offsets,
-                                     block_indices=indices)
+                                    block_indices=indices)
         return metadata
 
     def _update_metadata(self, attn_metadata, batch_size, seq_len, device,
@@ -324,6 +343,8 @@ class HpuModelAdapter:
             kwargs['attn_metadata'], input_ids.size(0), input_ids.size(1),
             input_ids.device, self.dtype)
         LoraMask.setLoraMask(kwargs.pop('lora_mask'))
+        if len(kwargs['input_ids'].shape) == 3:
+            kwargs['input_ids'] = kwargs['input_ids'].permute(2, 0, 1)
         hidden_states = self.model(*args, **kwargs)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         hidden_states = hidden_states.index_select(0, selected_token_indices)
@@ -564,6 +585,9 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                                                  self.block_size,
                                                  self.max_num_batched_tokens)
         self.graphed_buckets: Set[Any] = set()
+        self.vllm_tp_parallel = int(os.environ.get('VLLM_TP_PARALLEL', '1'))
+        self.vllm_tp_parallel_prefill_only = os.environ.get(
+            'VLLM_TP_PARALLEL_PREFILL_ONLY', 'false').lower() == 'true'
 
         self._set_gc_threshold()
         self.use_contiguous_pa = os.environ.get('VLLM_CONTIGUOUS_PA',
@@ -912,7 +936,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             num_decode_tokens=0,
             slot_mapping=slot_mapping,
             multi_modal_placeholder_index_maps=
-            None  # FIXME(kzawora): mutli-modality will not work here
+            None,  # FIXME(kzawora): mutli-modality will not work here
         )
         multi_modal_kwargs = MultiModalKwargs.batch(multi_modal_kwargs_list)
 
@@ -1097,10 +1121,139 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                                      slot_mapping=slot_mapping,
                                      lora_ids=lora_ids)
 
+    def prepare_input_tensors_wrapper(self,
+        seq_group_metadata_list: List[SequenceGroupMetadata],
+    ) -> Tuple[TModelInputForHPU, SamplingMetadata]:
+        def merge_partitioned_input(model_input_list):
+            if len(model_input_list) == 1:
+                return model_input_list[0]
+            else:
+                model_input = model_input_list[0]
+                input_tokens = []
+                input_tensor_dict = {
+                    'input_positions': [],
+                }
+                attn_meta_tensor_dict = {
+                    'slot_mapping': [],
+                    'block_list': [],
+                    'block_mapping': [],
+                    'block_usage': [],
+                    'block_indices': [],
+                    'block_offsets': [],
+                    'block_scales': [],
+                    'block_groups': [],
+                    'attn_bias': [],
+                    'seq_lens_tensor': [],
+                    'context_lens_tensor': [],
+                }
+                attn_meta_dict = {
+                    'num_prefills': [],
+                    'num_prefill_tokens': [],
+                    'num_decode_tokens': [],
+                }
+                input_meta_list_dict = {
+                    'seq_lens': [],
+                    'query_lens': [],
+                    'lora_ids': [],
+                }
+                input_meta_dict = {
+                    'real_batch_size': [],
+                    'batch_size_padded': []
+                }
+                for i in range(len(model_input_list)):
+                    input_tokens.append(model_input_list[i].input_tokens.unsqueeze(-1))
+                    for key in input_tensor_dict.keys():
+                        t = getattr(model_input_list[i], key)
+                        if t is not None:
+                            input_tensor_dict[key].append(t.unsqueeze(0))
+                    for key in attn_meta_tensor_dict.keys():
+                        t = getattr(model_input_list[i].attn_metadata, key)
+                        if t is not None:
+                            attn_meta_tensor_dict[key].append(t.unsqueeze(0))
+                    for key in attn_meta_dict.keys():
+                        t = getattr(model_input_list[i].attn_metadata, key)
+                        if isinstance(t, list):
+                            attn_meta_dict[key] += t
+                        else:
+                            attn_meta_dict[key].append(t)
+                    for key in input_meta_dict.keys():
+                        t = getattr(model_input_list[i], key)
+                        if isinstance(t, list):
+                            input_meta_dict[key] += t
+                        else:
+                            input_meta_dict[key].append(t)
+                    for key in input_meta_list_dict.keys():
+                        t = getattr(model_input_list[i], key)
+                        if isinstance(t, list):
+                            input_meta_list_dict[key] += t
+                        else:
+                            input_meta_list_dict[key].append(t)
+                model_input_dict = {}
+                model_input_attn_meta_dict = {}
+                for key in input_tensor_dict.keys():
+                    model_input_dict[key] = torch.cat(input_tensor_dict[key], dim=0) if len(input_tensor_dict[key]) > 0 else None
+                for key in attn_meta_tensor_dict.keys():
+                    model_input_attn_meta_dict[key] = torch.cat(attn_meta_tensor_dict[key], dim=0) if len(attn_meta_tensor_dict[key]) > 0 else None
+                for key in input_meta_dict.keys():
+                    model_input_dict[key] = sum(input_meta_dict[key])
+                for key in input_meta_list_dict.keys():
+                    model_input_dict[key] = input_meta_list_dict[key]
+                for key in attn_meta_dict.keys():
+                    model_input_attn_meta_dict[key] = sum(attn_meta_dict[key])
+                model_input_dict["input_tokens"] = torch.cat(input_tokens, dim=-1) if len(input_tokens) > 0 else None
+                model_input_dict["attn_metadata"] = dataclasses.replace(model_input.attn_metadata, **model_input_attn_meta_dict)
+                model_input = dataclasses.replace(model_input, **model_input_dict)
+                return model_input
+
+        # split seq_group_metadata_list based on num_partitions
+        model_input_list = []
+        remain = len(seq_group_metadata_list)
+        if self.vllm_tp_parallel_prefill_only:
+            step = remain // self.vllm_tp_parallel if seq_group_metadata_list[0].is_prompt else remain
+        else:
+            step = remain // self.vllm_tp_parallel
+        start = 0
+        while remain > 0:
+            end = min(start + step, start + remain)
+            model_input_ = self.prepare_input_tensors(seq_group_metadata_list[start:end])
+            start = end
+            remain = len(seq_group_metadata_list) - end
+            model_input_list.append(model_input_)
+
+        # provide a merged inputs
+        model_input = merge_partitioned_input(model_input_list)
+        sampling_metadata = self.prepare_sampling_metadata(seq_group_metadata_list, model_input)
+        return model_input, sampling_metadata
+
+    def prepare_sampling_metadata(self, seq_group_metadata_list: List[SequenceGroupMetadata], model_input: TModelInputForHPU) -> SamplingMetadata:
+        seq_lens = model_input.seq_lens
+        query_lens = model_input.query_lens
+        sampling_metadata = SamplingMetadata.prepare(seq_group_metadata_list,
+                                                     seq_lens, query_lens,
+                                                     self.device,
+                                                     self.pin_memory)
+        # FIXME: We need to adjust selected_token_indices to accommodate
+        # for padding
+        max_len = model_input.input_tokens.size(1)
+        paddings = [max_len - q for q in query_lens]
+        paddings = [0] + paddings[:-1]
+        paddings = list(itertools.accumulate(paddings))
+        paddings_prompt_logprobs = []
+        for i, seq_group_metadata in enumerate(seq_group_metadata_list):
+            if seq_group_metadata.sampling_params.prompt_logprobs is not None \
+                              and seq_group_metadata.is_prompt:
+                paddings_prompt_logprobs += ([paddings[i]] * seq_lens[i])
+        paddings = torch.tensor(
+            paddings_prompt_logprobs if paddings_prompt_logprobs else paddings,
+            dtype=sampling_metadata.selected_token_indices.dtype,
+            device=sampling_metadata.selected_token_indices.device)
+        sampling_metadata.selected_token_indices.add_(paddings)
+        return sampling_metadata
+
     def prepare_input_tensors(
         self,
         seq_group_metadata_list: List[SequenceGroupMetadata],
-    ) -> Tuple[TModelInputForHPU, SamplingMetadata]:
+    ) -> TModelInputForHPU:
         if len(seq_group_metadata_list) == 0:
             return self._model_input_cls(), None
 
@@ -1163,10 +1316,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             decode_slot_mapping,
             decode_lora_ids,
         ) = self._prepare_decode(decode_reqs)
-        sampling_metadata = SamplingMetadata.prepare(seq_group_metadata_list,
-                                                     seq_lens, query_lens,
-                                                     self.device,
-                                                     self.pin_memory)
 
         if not self.scheduler_config.chunked_prefill_enabled:
             assert (len(prefill_reqs) and len(decode_reqs)) == 0
@@ -1190,23 +1339,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             lora_requests = decode_lora_requests
             lora_ids = decode_lora_ids
 
-        # FIXME: We need to adjust selected_token_indices to accommodate
-        # for padding
-        max_len = input_tokens.size(1)
-        paddings = [max_len - q for q in query_lens]
-        paddings = [0] + paddings[:-1]
-        paddings = list(itertools.accumulate(paddings))
-        paddings_prompt_logprobs = []
-        for i, seq_group_metadata in enumerate(seq_group_metadata_list):
-            if seq_group_metadata.sampling_params.prompt_logprobs is not None \
-                              and seq_group_metadata.is_prompt:
-                paddings_prompt_logprobs += ([paddings[i]] * seq_lens[i])
-        paddings = torch.tensor(
-            paddings_prompt_logprobs if paddings_prompt_logprobs else paddings,
-            dtype=sampling_metadata.selected_token_indices.dtype,
-            device=sampling_metadata.selected_token_indices.device)
-        sampling_metadata.selected_token_indices.add_(paddings)
-
         if self.lora_config:
             lora_mapping = LoRAMapping(
                 **dict(index_mapping=lora_index_mapping,
@@ -1227,7 +1359,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         metadata_dict = {
             "input_tokens": input_tokens,
             "input_positions": input_positions,
-            "selected_token_indices": sampling_metadata.selected_token_indices,
             "lora_requests": lora_requests,
             "lora_mapping": lora_mapping,
             "multi_modal_kwargs": multi_modal_kwargs,
@@ -1258,8 +1389,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                                      multi_modal_kwargs=multi_modal_kwargs,
                                      real_batch_size=real_batch_size,
                                      batch_size_padded=batch_size_padded,
-                                     lora_ids=lora_ids), \
-                                        sampling_metadata
+                                     lora_ids=lora_ids)
 
     def _seq_len(self, attn_metadata):
         if attn_metadata.num_prefills != 0:
@@ -1830,7 +1960,7 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
             if self.profiler.enabled:
                 self.profiler_counter_helper.capture_seq_group_metadata_stats(
                     seq_group_metadata_list=seq_group_metadata_list)
-            model_input, sampling_metadata = self.prepare_input_tensors(
+            model_input, sampling_metadata = self.prepare_input_tensors_wrapper(
                 seq_group_metadata_list)
             assert model_input.attn_metadata is not None
             is_prompt = model_input.attn_metadata.is_prompt
