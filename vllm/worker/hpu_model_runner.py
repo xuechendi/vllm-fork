@@ -278,8 +278,8 @@ class HpuModelAdapter:
                                      attn_bias=attn_bias)
         return metadata
 
-    def _set_block_scales(self, metadata, device):
-        if len(metadata.block_mapping.shape) == 1:
+    def _set_block_scales(self, metadata, device, tp_parallel_size):
+        if tp_parallel_size == 1:
             block_mapping = metadata.block_mapping
             ones = torch.ones((block_mapping.size(0), ),
                             device=device,
@@ -288,9 +288,8 @@ class HpuModelAdapter:
             block_scales = torch.reciprocal(torch.maximum(ones, sums))
             metadata = metadata._replace(block_scales=block_scales)
         else:
-            tp_parralel_size = metadata.block_mapping.shape[0]
-            block_scales = [None] * tp_parralel_size
-            for i in range(tp_parralel_size):
+            block_scales = [None] * tp_parallel_size
+            for i in range(tp_parallel_size):
                 block_mapping = metadata.block_mapping[i]
                 ones = torch.ones((block_mapping.size(0), ),
                                 device=device,
@@ -300,17 +299,17 @@ class HpuModelAdapter:
             metadata = metadata._replace(block_scales=torch.stack(block_scales))
         return metadata
 
-    def _set_indices_and_offsets(self, metadata, block_size, is_prompt):
-        if len(metadata.slot_mapping.shape) == 2:
+    def _set_indices_and_offsets(self, metadata, block_size, is_prompt, tp_parallel_size):
+        if tp_parallel_size == 1:
             flat_dim = 0
-        elif len(metadata.slot_mapping.shape) == 3:
+        else:
             flat_dim = 1
         slot_mapping = torch.flatten(metadata.slot_mapping, start_dim=flat_dim)
         indices = torch.div(slot_mapping, block_size, rounding_mode="floor")
         if is_prompt:
-            if len(metadata.slot_mapping.shape) == 2:
+            if tp_parallel_size == 1:
                 indices = indices.unflatten(0, (-1, block_size))[:, 0]
-            elif len(metadata.slot_mapping.shape) == 3:
+            else:
                 indices = indices.unflatten(1, (-1, block_size))[:, :, 0]
             offsets = None
         else:
@@ -320,30 +319,32 @@ class HpuModelAdapter:
         return metadata
 
     def _update_metadata(self, attn_metadata, batch_size, seq_len, device,
-                         dtype):
+                         dtype, tp_parallel_size):
         if attn_metadata.is_prompt:
             attn_metadata = self._set_attn_bias(attn_metadata, batch_size,
                                                 seq_len, device, dtype)
         else:
             attn_metadata = self._set_block_mapping(attn_metadata, batch_size,
                                                     device, dtype)
-            attn_metadata = self._set_block_scales(attn_metadata, device)
+            attn_metadata = self._set_block_scales(attn_metadata, device, tp_parallel_size)
+        attn_metadata = attn_metadata._replace(tp_parallel_size=tp_parallel_size)
         attn_metadata = self._set_indices_and_offsets(attn_metadata,
                                                       self.block_size,
-                                                      attn_metadata.is_prompt)
+                                                      attn_metadata.is_prompt, tp_parallel_size)
         return attn_metadata
 
     def forward(self, *args, **kwargs):
         kwargs = kwargs.copy()
         selected_token_indices = kwargs.pop('selected_token_indices')
+        tp_parallel_size = kwargs['attn_metadata'].tp_parallel_size
         if 'warmup_mode' in kwargs:
             kwargs.pop('warmup_mode')
         input_ids = kwargs['input_ids']
         kwargs['attn_metadata'] = self._update_metadata(
             kwargs['attn_metadata'], input_ids.size(0), input_ids.size(1),
-            input_ids.device, self.dtype)
+            input_ids.device, self.dtype, tp_parallel_size)
         LoraMask.setLoraMask(kwargs.pop('lora_mask'))
-        if len(kwargs['input_ids'].shape) == 3:
+        if tp_parallel_size > 1:
             kwargs['input_ids'] = kwargs['input_ids'].permute(2, 0, 1)
         hidden_states = self.model(*args, **kwargs)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
@@ -587,7 +588,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self.graphed_buckets: Set[Any] = set()
         self.vllm_tp_parallel = int(os.environ.get('VLLM_TP_PARALLEL', '1'))
         self.vllm_tp_parallel_prefill_only = os.environ.get(
-            'VLLM_TP_PARALLEL_PREFILL_ONLY', 'false').lower() == 'true'
+            'VLLM_TP_PARALLEL_PREFILL_ONLY', 'true').lower() == 'true'
 
         self._set_gc_threshold()
         self.use_contiguous_pa = os.environ.get('VLLM_CONTIGUOUS_PA',
@@ -1125,7 +1126,10 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         seq_group_metadata_list: List[SequenceGroupMetadata],
     ) -> Tuple[TModelInputForHPU, SamplingMetadata]:
         def merge_partitioned_input(model_input_list):
-            if len(model_input_list) == 1:
+            tp_parallel_size = len(model_input_list)
+            if tp_parallel_size == 1:
+                attn_meta = dataclasses.replace(model_input_list[0].attn_metadata, tp_parallel_size=tp_parallel_size)
+                model_input_list[0] = dataclasses.replace(model_input_list[0], attn_metadata=attn_meta) 
                 return model_input_list[0]
             else:
                 model_input = model_input_list[0]
@@ -1160,7 +1164,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                     'real_batch_size': [],
                     'batch_size_padded': []
                 }
-                for i in range(len(model_input_list)):
+                for i in range(tp_parallel_size):
                     input_tokens.append(model_input_list[i].input_tokens.unsqueeze(-1))
                     for key in input_tensor_dict.keys():
                         t = getattr(model_input_list[i], key)
@@ -1200,6 +1204,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                     model_input_dict[key] = input_meta_list_dict[key]
                 for key in attn_meta_dict.keys():
                     model_input_attn_meta_dict[key] = sum(attn_meta_dict[key])
+                model_input_attn_meta_dict["tp_parallel_size"] = tp_parallel_size
                 model_input_dict["input_tokens"] = torch.cat(input_tokens, dim=-1) if len(input_tokens) > 0 else None
                 model_input_dict["attn_metadata"] = dataclasses.replace(model_input.attn_metadata, **model_input_attn_meta_dict)
                 model_input = dataclasses.replace(model_input, **model_input_dict)
@@ -1207,17 +1212,19 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
 
         # split seq_group_metadata_list based on num_partitions
         model_input_list = []
-        remain = len(seq_group_metadata_list)
+        orig_size = len(seq_group_metadata_list)
+        remain = orig_size
         if self.vllm_tp_parallel_prefill_only:
             step = remain // self.vllm_tp_parallel if seq_group_metadata_list[0].is_prompt else remain
         else:
             step = remain // self.vllm_tp_parallel
+        step = remain if step == 0 else step
         start = 0
         while remain > 0:
             end = min(start + step, start + remain)
             model_input_ = self.prepare_input_tensors(seq_group_metadata_list[start:end])
             start = end
-            remain = len(seq_group_metadata_list) - end
+            remain = orig_size - end
             model_input_list.append(model_input_)
 
         # provide a merged inputs
@@ -1422,7 +1429,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             'attn_bias', 'seq_lens_tensor', 'context_lens_tensor',
             'block_list', 'block_mapping', 'block_usage', 'slot_mapping',
             'is_prompt', 'block_indices', 'block_offsets', 'block_scales',
-            'block_groups'
+            'block_groups', 'tp_parallel_size'
         ])
         return attention_metadata
 
@@ -2160,7 +2167,7 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                         broadcast_data["positions"],
                         "attn_metadata":
                         self.trim_attn_metadata(
-                            broadcast_data["attn_metadata"])
+                            broadcast_data["attn_metadata"]),
                     })
                 with self.profiler.record_event('internal', model_event_name):
                     hidden_states = self.model.forward(

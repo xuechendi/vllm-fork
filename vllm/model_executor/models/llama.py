@@ -254,10 +254,7 @@ class LlamaDecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
-        if isinstance(hidden_states, list):
-            tp_parrallel_size = len(hidden_states)
-        else:
-            tp_parrallel_size = hidden_states.size()[0] if len(hidden_states.size()) == 4 else 1
+        tp_parrallel_size = attn_metadata.tp_parallel_size
         if tp_parrallel_size == 1:
             # original code path
             if residual is None:

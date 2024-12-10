@@ -74,6 +74,7 @@ class HPUAttentionMetadata(HPUPagedAttentionMetadata, AttentionMetadata):
     attn_bias: Optional[torch.Tensor]
     seq_lens_tensor: Optional[torch.Tensor]
     context_lens_tensor: Optional[torch.Tensor]
+    tp_parallel_size: int = 1
 
 
 class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
