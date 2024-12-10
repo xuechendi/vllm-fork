@@ -94,6 +94,7 @@ class Attention(nn.Module):
         kv_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
         attn_type: AttentionType = AttentionType.DECODER,
+        **kwargs,
     ) -> torch.Tensor:
 
         return self.impl.forward(query,
@@ -103,7 +104,8 @@ class Attention(nn.Module):
                                  attn_metadata,
                                  self._k_scale,
                                  self._v_scale,
-                                 attn_type=attn_type)
+                                 attn_type=attn_type,
+                                 **kwargs)
 
     def extra_repr(self) -> str:
         s = f"head_size={self.impl.head_size}"  # type: ignore

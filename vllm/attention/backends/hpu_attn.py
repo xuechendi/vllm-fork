@@ -150,6 +150,7 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
         k_scale: float = 1.0,
         v_scale: float = 1.0,
         attn_type: AttentionType = AttentionType.DECODER,
+        **kwargs,
     ) -> torch.Tensor:
         """Forward pass with xFormers and PagedAttention.
 
@@ -167,17 +168,37 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                                       "encoder/decoder cross-attention "
                                       "are not implemented for "
                                       "HPUAttentionImpl")
+        tp_parallel_idx = int(kwargs.get('tp_parallel_idx', -1))
+        if tp_parallel_idx != -1:
+            block_indices = attn_metadata.block_indices[tp_parallel_idx] if attn_metadata.block_indices is not None else None
+            block_offsets = attn_metadata.block_offsets[tp_parallel_idx] if attn_metadata.block_offsets is not None else None
+            block_mapping = attn_metadata.block_mapping[tp_parallel_idx] if attn_metadata.block_mapping is not None else None
+            block_scales = attn_metadata.block_scales[tp_parallel_idx] if attn_metadata.block_scales is not None else None
+            block_groups = attn_metadata.block_groups[tp_parallel_idx] if attn_metadata.block_groups is not None else None
+            block_list = attn_metadata.block_list[tp_parallel_idx] if attn_metadata.block_list is not None else None
+            seq_lens_tensor = attn_metadata.seq_lens_tensor[tp_parallel_idx] if attn_metadata.seq_lens_tensor is not None else None
+            attn_bias = attn_metadata.attn_bias[tp_parallel_idx] if attn_metadata.attn_bias is not None else None
+            block_indices_bs = attn_metadata.block_indices.size(1)
+        else:
+            block_indices = attn_metadata.block_indices
+            block_offsets = attn_metadata.block_offsets
+            block_mapping = attn_metadata.block_mapping
+            block_scales = attn_metadata.block_scales
+            block_groups = attn_metadata.block_groups
+            block_list = attn_metadata.block_list
+            seq_lens_tensor = attn_metadata.seq_lens_tensor
+            attn_bias = attn_metadata.attn_bias
+            block_indices_bs = attn_metadata.block_indices.size(0)
+
         batch_size, seq_len, hidden_size = query.shape
         _, seq_len_kv, _ = key.shape
 
         query = query.view(-1, self.num_heads, self.head_size)
         key = key.view(-1, self.num_kv_heads, self.head_size)
         value = value.view(-1, self.num_kv_heads, self.head_size)
-        block_indices = attn_metadata.block_indices
-        block_offsets = attn_metadata.block_offsets
         if attn_metadata.is_prompt:
-            key = key.unflatten(0, (block_indices.size(0), -1))
-            value = value.unflatten(0, (block_indices.size(0), -1))
+            key = key.unflatten(0, (block_indices_bs, -1))
+            value = value.unflatten(0, (block_indices_bs, -1))
         if kv_cache is not None:
             key_cache, value_cache = HPUPagedAttention.split_kv_cache(
                 kv_cache, self.num_kv_heads, self.head_size)
@@ -195,12 +216,11 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             query_shape = (batch_size, seq_len, self.num_heads, self.head_size)
             kv_shape = (batch_size, seq_len_kv, self.num_kv_heads,
                         self.head_size)
-            if attn_metadata is None or attn_metadata.block_list is None:
+            if attn_metadata is None or block_list is None:
                 if not self.prefill_use_fusedsdpa:
                     # TODO: move this outside of model
-                    assert attn_metadata.attn_bias is not None, \
+                    assert attn_bias is not None, \
                             'attn_bias must be set before calling model.forward'
-                    attn_bias = attn_metadata.attn_bias
                     if self.alibi_slopes is not None:
                         position_bias = _make_alibi_bias(
                             self.alibi_slopes, self.num_kv_heads,
@@ -221,7 +241,7 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                     matmul_qk_op=self.matmul_qk,
                     softmax_op=self.softmax,
                     matmul_av_op=self.matmul_av,
-                    valid_seq_lengths=attn_metadata.seq_lens_tensor,
+                    valid_seq_lengths=seq_lens_tensor,
                 )
             else:
                 # TODO: enable FusedSDPA
@@ -231,8 +251,8 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                     value=value.view(kv_shape),
                     key_cache=key_cache,
                     value_cache=value_cache,
-                    block_list=attn_metadata.block_list,
-                    attn_bias=attn_metadata.attn_bias,
+                    block_list=block_list,
+                    attn_bias=attn_bias,
                     scale=self.scale,
                     matmul_qk_op=self.matmul_qk,
                     matmul_av_op=self.matmul_av,
@@ -246,11 +266,11 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                 query=query,
                 key_cache=key_cache,
                 value_cache=value_cache,
-                block_list=attn_metadata.block_list,
-                block_mapping=attn_metadata.block_mapping,
-                block_bias=attn_metadata.attn_bias,
-                block_scales=attn_metadata.block_scales,
-                block_groups=attn_metadata.block_groups,
+                block_list=block_list,
+                block_mapping=block_mapping,
+                block_bias=attn_bias,
+                block_scales=block_scales,
+                block_groups=block_groups,
                 scale=self.scale,
                 matmul_qk_op=self.matmul_qk,
                 matmul_av_op=self.matmul_av,

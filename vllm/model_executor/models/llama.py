@@ -185,11 +185,12 @@ class LlamaAttention(nn.Module):
         hidden_states: torch.Tensor,
         kv_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
+        tp_parallel_idx: int = 0,
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q, k = self.rotary_emb(positions, q, k)
-        attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
+        attn_output = self.attn(q, k, v, kv_cache, attn_metadata, tp_parallel_idx = tp_parallel_idx)
         output, _ = self.o_proj(attn_output)
         return output
 
@@ -259,15 +260,33 @@ class LlamaDecoderLayer(nn.Module):
         else:
             hidden_states, residual = self.input_layernorm(
                 hidden_states, residual)
-        hidden_states = self.self_attn(positions=positions,
-                                       hidden_states=hidden_states,
-                                       kv_cache=kv_cache,
-                                       attn_metadata=attn_metadata)
+        tp_parrallel_size = hidden_states.size()[0] if len(hidden_states.size()) == 4 else 1
+        if tp_parrallel_size == 1:
+            hidden_states = self.self_attn(positions=positions,
+                                        hidden_states=hidden_states,
+                                        kv_cache=kv_cache,
+                                        attn_metadata=attn_metadata,
+                                        tp_parallel_idx=-1)
+            hidden_states, residual = self.post_attention_layernorm(
+                hidden_states, residual)
+            hidden_states = self.mlp(hidden_states)
+        else:
+            hidden_states_list = [None] * tp_parrallel_size
+            residual_list = [None] * tp_parrallel_size
+            for i in range(tp_parrallel_size):
+                hidden_states_list[i] = self.self_attn(positions=positions[i],
+                                            hidden_states=hidden_states[i],
+                                            kv_cache=kv_cache,
+                                            attn_metadata=attn_metadata, 
+                                            tp_parallel_idx=i)
 
-        # Fully Connected
-        hidden_states, residual = self.post_attention_layernorm(
-            hidden_states, residual)
-        hidden_states = self.mlp(hidden_states)
+            # Fully Connected
+            for i in range(tp_parrallel_size):
+                hidden_states_list[i], residual_list[i] = self.post_attention_layernorm(
+                    hidden_states_list[i], residual[i])
+                hidden_states_list[i] = self.mlp(hidden_states_list[i])
+            hidden_states = torch.stack(hidden_states_list, dim=0)
+            residual = torch.stack(residual_list, dim=0)
         return hidden_states, residual
 
 
