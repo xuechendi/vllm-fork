@@ -169,27 +169,16 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                                       "encoder/decoder cross-attention "
                                       "are not implemented for "
                                       "HPUAttentionImpl")
-        tp_parallel_idx = int(kwargs.get('tp_parallel_idx', -1))
-        if tp_parallel_idx != -1:
-            block_indices = attn_metadata.block_indices[tp_parallel_idx] if attn_metadata.block_indices is not None else None
-            block_offsets = attn_metadata.block_offsets[tp_parallel_idx] if attn_metadata.block_offsets is not None else None
-            block_mapping = attn_metadata.block_mapping[tp_parallel_idx] if attn_metadata.block_mapping is not None else None
-            block_scales = attn_metadata.block_scales[tp_parallel_idx] if attn_metadata.block_scales is not None else None
-            block_groups = attn_metadata.block_groups[tp_parallel_idx] if attn_metadata.block_groups is not None else None
-            block_list = attn_metadata.block_list[tp_parallel_idx] if attn_metadata.block_list is not None else None
-            seq_lens_tensor = attn_metadata.seq_lens_tensor[tp_parallel_idx] if attn_metadata.seq_lens_tensor is not None else None
-            attn_bias = attn_metadata.attn_bias[tp_parallel_idx] if attn_metadata.attn_bias is not None else None
-            block_indices_bs = attn_metadata.block_indices.size(1)
-        else:
-            block_indices = attn_metadata.block_indices
-            block_offsets = attn_metadata.block_offsets
-            block_mapping = attn_metadata.block_mapping
-            block_scales = attn_metadata.block_scales
-            block_groups = attn_metadata.block_groups
-            block_list = attn_metadata.block_list
-            seq_lens_tensor = attn_metadata.seq_lens_tensor
-            attn_bias = attn_metadata.attn_bias
-            block_indices_bs = attn_metadata.block_indices.size(0)
+        tp_parallel_idx = int(kwargs.get('tp_parallel_idx', 1))
+        block_indices = attn_metadata.block_indices[tp_parallel_idx] if attn_metadata.block_indices is not None else None
+        block_offsets = attn_metadata.block_offsets[tp_parallel_idx] if attn_metadata.block_offsets is not None else None
+        block_mapping = attn_metadata.block_mapping[tp_parallel_idx] if attn_metadata.block_mapping is not None else None
+        block_scales = attn_metadata.block_scales[tp_parallel_idx] if attn_metadata.block_scales is not None else None
+        block_groups = attn_metadata.block_groups[tp_parallel_idx] if attn_metadata.block_groups is not None else None
+        block_list = attn_metadata.block_list[tp_parallel_idx] if attn_metadata.block_list is not None else None
+        seq_lens_tensor = attn_metadata.seq_lens_tensor[tp_parallel_idx] if attn_metadata.seq_lens_tensor is not None else None
+        attn_bias = attn_metadata.attn_bias[tp_parallel_idx] if attn_metadata.attn_bias is not None else None
+        block_indices_bs = attn_metadata.block_indices.size(1)
 
         batch_size, seq_len, hidden_size = query.shape
         _, seq_len_kv, _ = key.shape

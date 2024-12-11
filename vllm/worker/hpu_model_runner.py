@@ -278,39 +278,25 @@ class HpuModelAdapter:
                                      attn_bias=attn_bias)
         return metadata
 
-    def _set_block_scales(self, metadata, device, tp_parallel_size):
-        if tp_parallel_size == 1:
-            block_mapping = metadata.block_mapping
+    def _set_block_scales(self, metadata, device):
+        tp_parallel_size = metadata.tp_parallel_size
+        block_scales = [None] * tp_parallel_size
+        for i in range(tp_parallel_size):
+            block_mapping = metadata.block_mapping[i]
             ones = torch.ones((block_mapping.size(0), ),
                             device=device,
                             dtype=block_mapping.dtype)
             sums = batch2block(block2batch(ones, block_mapping), block_mapping)
-            block_scales = torch.reciprocal(torch.maximum(ones, sums))
-            metadata = metadata._replace(block_scales=block_scales)
-        else:
-            block_scales = [None] * tp_parallel_size
-            for i in range(tp_parallel_size):
-                block_mapping = metadata.block_mapping[i]
-                ones = torch.ones((block_mapping.size(0), ),
-                                device=device,
-                                dtype=block_mapping.dtype)
-                sums = batch2block(block2batch(ones, block_mapping), block_mapping)
-                block_scales[i] = torch.reciprocal(torch.maximum(ones, sums))
-            metadata = metadata._replace(block_scales=torch.stack(block_scales))
+            block_scales[i] = torch.reciprocal(torch.maximum(ones, sums))
+        metadata = metadata._replace(block_scales=torch.stack(block_scales))
         return metadata
 
-    def _set_indices_and_offsets(self, metadata, block_size, is_prompt, tp_parallel_size):
-        if tp_parallel_size == 1:
-            flat_dim = 0
-        else:
-            flat_dim = 1
+    def _set_indices_and_offsets(self, metadata, block_size, is_prompt):
+        flat_dim = 1
         slot_mapping = torch.flatten(metadata.slot_mapping, start_dim=flat_dim)
         indices = torch.div(slot_mapping, block_size, rounding_mode="floor")
         if is_prompt:
-            if tp_parallel_size == 1:
-                indices = indices.unflatten(0, (-1, block_size))[:, 0]
-            else:
-                indices = indices.unflatten(1, (-1, block_size))[:, :, 0]
+            indices = indices.unflatten(1, (-1, block_size))[:, :, 0]
             offsets = None
         else:
             offsets = torch.fmod(slot_mapping, block_size)
@@ -319,33 +305,31 @@ class HpuModelAdapter:
         return metadata
 
     def _update_metadata(self, attn_metadata, batch_size, seq_len, device,
-                         dtype, tp_parallel_size):
+                         dtype):
         if attn_metadata.is_prompt:
             attn_metadata = self._set_attn_bias(attn_metadata, batch_size,
                                                 seq_len, device, dtype)
         else:
             attn_metadata = self._set_block_mapping(attn_metadata, batch_size,
                                                     device, dtype)
-            attn_metadata = self._set_block_scales(attn_metadata, device, tp_parallel_size)
-        attn_metadata = attn_metadata._replace(tp_parallel_size=tp_parallel_size)
+            attn_metadata = self._set_block_scales(attn_metadata, device)
         attn_metadata = self._set_indices_and_offsets(attn_metadata,
                                                       self.block_size,
-                                                      attn_metadata.is_prompt, tp_parallel_size)
+                                                      attn_metadata.is_prompt)
         return attn_metadata
 
     def forward(self, *args, **kwargs):
         kwargs = kwargs.copy()
         selected_token_indices = kwargs.pop('selected_token_indices')
-        tp_parallel_size = kwargs['attn_metadata'].tp_parallel_size
         if 'warmup_mode' in kwargs:
             kwargs.pop('warmup_mode')
         input_ids = kwargs['input_ids']
         kwargs['attn_metadata'] = self._update_metadata(
             kwargs['attn_metadata'], input_ids.size(0), input_ids.size(1),
-            input_ids.device, self.dtype, tp_parallel_size)
+            input_ids.device, self.dtype)
         LoraMask.setLoraMask(kwargs.pop('lora_mask'))
-        if tp_parallel_size > 1:
-            kwargs['input_ids'] = kwargs['input_ids'].permute(2, 0, 1)
+        # change input_ids from [bs, seq_len, num_splits] to [num_splits, bs, seq_len]
+        kwargs['input_ids'] = kwargs['input_ids'].permute(2, 0, 1)
         hidden_states = self.model(*args, **kwargs)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         hidden_states = hidden_states.index_select(0, selected_token_indices)
@@ -1127,88 +1111,83 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
     ) -> Tuple[TModelInputForHPU, SamplingMetadata]:
         def merge_partitioned_input(model_input_list):
             tp_parallel_size = len(model_input_list)
-            if tp_parallel_size == 1:
-                attn_meta = dataclasses.replace(model_input_list[0].attn_metadata, tp_parallel_size=tp_parallel_size)
-                model_input_list[0] = dataclasses.replace(model_input_list[0], attn_metadata=attn_meta) 
-                return model_input_list[0]
-            else:
-                model_input = model_input_list[0]
-                input_tokens = []
-                input_tensor_dict = {
-                    'input_positions': [],
-                }
-                attn_meta_tensor_dict = {
-                    'slot_mapping': [],
-                    'block_list': [],
-                    'block_mapping': [],
-                    'block_usage': [],
-                    'block_indices': [],
-                    'block_offsets': [],
-                    'block_scales': [],
-                    'block_groups': [],
-                    'attn_bias': [],
-                    'seq_lens_tensor': [],
-                    'context_lens_tensor': [],
-                }
-                attn_meta_dict = {
-                    'num_prefills': [],
-                    'num_prefill_tokens': [],
-                    'num_decode_tokens': [],
-                }
-                input_meta_list_dict = {
-                    'seq_lens': [],
-                    'query_lens': [],
-                    'lora_ids': [],
-                }
-                input_meta_dict = {
-                    'real_batch_size': [],
-                    'batch_size_padded': []
-                }
-                for i in range(tp_parallel_size):
-                    input_tokens.append(model_input_list[i].input_tokens.unsqueeze(-1))
-                    for key in input_tensor_dict.keys():
-                        t = getattr(model_input_list[i], key)
-                        if t is not None:
-                            input_tensor_dict[key].append(t.unsqueeze(0))
-                    for key in attn_meta_tensor_dict.keys():
-                        t = getattr(model_input_list[i].attn_metadata, key)
-                        if t is not None:
-                            attn_meta_tensor_dict[key].append(t.unsqueeze(0))
-                    for key in attn_meta_dict.keys():
-                        t = getattr(model_input_list[i].attn_metadata, key)
-                        if isinstance(t, list):
-                            attn_meta_dict[key] += t
-                        else:
-                            attn_meta_dict[key].append(t)
-                    for key in input_meta_dict.keys():
-                        t = getattr(model_input_list[i], key)
-                        if isinstance(t, list):
-                            input_meta_dict[key] += t
-                        else:
-                            input_meta_dict[key].append(t)
-                    for key in input_meta_list_dict.keys():
-                        t = getattr(model_input_list[i], key)
-                        if isinstance(t, list):
-                            input_meta_list_dict[key] += t
-                        else:
-                            input_meta_list_dict[key].append(t)
-                model_input_dict = {}
-                model_input_attn_meta_dict = {}
+            model_input = model_input_list[0]
+            input_tokens = []
+            input_tensor_dict = {
+                'input_positions': [],
+            }
+            attn_meta_tensor_dict = {
+                'slot_mapping': [],
+                'block_list': [],
+                'block_mapping': [],
+                'block_usage': [],
+                'block_indices': [],
+                'block_offsets': [],
+                'block_scales': [],
+                'block_groups': [],
+                'attn_bias': [],
+                'seq_lens_tensor': [],
+                'context_lens_tensor': [],
+            }
+            attn_meta_dict = {
+                'num_prefills': [],
+                'num_prefill_tokens': [],
+                'num_decode_tokens': [],
+            }
+            input_meta_list_dict = {
+                'seq_lens': [],
+                'query_lens': [],
+                'lora_ids': [],
+            }
+            input_meta_dict = {
+                'real_batch_size': [],
+                'batch_size_padded': []
+            }
+            for i in range(tp_parallel_size):
+                input_tokens.append(model_input_list[i].input_tokens.unsqueeze(-1))
                 for key in input_tensor_dict.keys():
-                    model_input_dict[key] = torch.cat(input_tensor_dict[key], dim=0) if len(input_tensor_dict[key]) > 0 else None
+                    t = getattr(model_input_list[i], key)
+                    if t is not None:
+                        input_tensor_dict[key].append(t.unsqueeze(0))
                 for key in attn_meta_tensor_dict.keys():
-                    model_input_attn_meta_dict[key] = torch.cat(attn_meta_tensor_dict[key], dim=0) if len(attn_meta_tensor_dict[key]) > 0 else None
-                for key in input_meta_dict.keys():
-                    model_input_dict[key] = sum(input_meta_dict[key])
-                for key in input_meta_list_dict.keys():
-                    model_input_dict[key] = input_meta_list_dict[key]
+                    t = getattr(model_input_list[i].attn_metadata, key)
+                    if t is not None:
+                        attn_meta_tensor_dict[key].append(t.unsqueeze(0))
                 for key in attn_meta_dict.keys():
-                    model_input_attn_meta_dict[key] = sum(attn_meta_dict[key])
-                model_input_attn_meta_dict["tp_parallel_size"] = tp_parallel_size
-                model_input_dict["input_tokens"] = torch.cat(input_tokens, dim=-1) if len(input_tokens) > 0 else None
-                model_input_dict["attn_metadata"] = dataclasses.replace(model_input.attn_metadata, **model_input_attn_meta_dict)
-                model_input = dataclasses.replace(model_input, **model_input_dict)
-                return model_input
+                    t = getattr(model_input_list[i].attn_metadata, key)
+                    if isinstance(t, list):
+                        attn_meta_dict[key] += t
+                    else:
+                        attn_meta_dict[key].append(t)
+                for key in input_meta_dict.keys():
+                    t = getattr(model_input_list[i], key)
+                    if isinstance(t, list):
+                        input_meta_dict[key] += t
+                    else:
+                        input_meta_dict[key].append(t)
+                for key in input_meta_list_dict.keys():
+                    t = getattr(model_input_list[i], key)
+                    if isinstance(t, list):
+                        input_meta_list_dict[key] += t
+                    else:
+                        input_meta_list_dict[key].append(t)
+            model_input_dict = {}
+            model_input_attn_meta_dict = {}
+            for key in input_tensor_dict.keys():
+                model_input_dict[key] = torch.cat(input_tensor_dict[key], dim=0) if len(input_tensor_dict[key]) > 0 else None
+            for key in attn_meta_tensor_dict.keys():
+                model_input_attn_meta_dict[key] = torch.cat(attn_meta_tensor_dict[key], dim=0) if len(attn_meta_tensor_dict[key]) > 0 else None
+            for key in input_meta_dict.keys():
+                model_input_dict[key] = sum(input_meta_dict[key])
+            for key in input_meta_list_dict.keys():
+                model_input_dict[key] = input_meta_list_dict[key]
+            for key in attn_meta_dict.keys():
+                model_input_attn_meta_dict[key] = sum(attn_meta_dict[key])
+            model_input_attn_meta_dict["tp_parallel_size"] = tp_parallel_size
+            model_input_dict["input_tokens"] = torch.cat(input_tokens, dim=-1) if len(input_tokens) > 0 else None
+            model_input_dict["attn_metadata"] = dataclasses.replace(model_input.attn_metadata, **model_input_attn_meta_dict)
+            model_input = dataclasses.replace(model_input, **model_input_dict)
+            return model_input
 
         # split seq_group_metadata_list based on num_partitions
         model_input_list = []
