@@ -330,6 +330,7 @@ class HpuModelAdapter:
         LoraMask.setLoraMask(kwargs.pop('lora_mask'))
         # change input_ids from [bs, seq_len, num_splits] to [num_splits, bs, seq_len]
         kwargs['input_ids'] = kwargs['input_ids'].permute(2, 0, 1)
+        print("input_ids shape: ", kwargs['input_ids'].shape)
         hidden_states = self.model(*args, **kwargs)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         hidden_states = hidden_states.index_select(0, selected_token_indices)
