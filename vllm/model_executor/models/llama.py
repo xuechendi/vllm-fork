@@ -257,23 +257,23 @@ class LlamaDecoderLayer(nn.Module):
         # new code path for handling partitioned tensor
         if not isinstance(hidden_states, list):
             tp_parrallel_size = hidden_states.shape[0]
-            hidden_states_list = [None] * tp_parrallel_size
-            residual_list = [None] * tp_parrallel_size
-            input_hidden_states = hidden_states
-            input_residual = residual if residual is not None else residual_list
+            hidden_states_list = [hidden_states[i] for i in range(tp_parrallel_size)]
         else:
             tp_parrallel_size = len(hidden_states)
             hidden_states_list = hidden_states
+        if residual is None:
+            residual_list = [None] * tp_parrallel_size
+        else:
             residual_list = residual
-            input_hidden_states = hidden_states_list
-            input_residual = residual_list
+
         for i in range(tp_parrallel_size):
-            if input_residual[i] is None:
-                residual_list[i] = input_hidden_states[i]
-                hidden_states_list[i] = self.input_layernorm(input_hidden_states[i])
+            if residual_list[i] is None:
+                residual_list[i] = hidden_states_list[i]
+                hidden_states_list[i] = self.input_layernorm(hidden_states_list[i])
             else:
                 hidden_states_list[i], residual_list[i] = self.input_layernorm(
-                input_hidden_states[i], input_residual[i])
+                hidden_states_list[i], residual_list[i])
+
             hidden_states_list[i] = self.self_attn(positions=positions[i],
                                         hidden_states=hidden_states_list[i],
                                         kv_cache=kv_cache,
