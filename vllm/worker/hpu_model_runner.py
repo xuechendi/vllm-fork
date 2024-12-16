@@ -893,6 +893,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         max_prompt_len = max(
             self.bucketing_ctx.get_padded_prompt_seq_len(max(seq_lens)),
             self.block_size)
+        print(">>>>>>>> seq_lens are", seq_lens, "max_prompt_len is ",  max_prompt_len)
 
         lora_ids: List[int] = []
         for seq_group_metadata, context_len in zip(seq_group_metadata_list,
