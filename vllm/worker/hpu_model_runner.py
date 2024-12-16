@@ -750,7 +750,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                                          model_config is not None else None),
                 hidden_layer_markstep_interval)
             recompute_cos_sin = os.getenv('VLLM_COS_SIN_RECOMPUTE',
-                                          'false').lower() == 'true'
+                                          'false').lower() in ['1', 'true']
             names_for_rope = get_names_for_rope(self.model)
             torch.hpu.synchronize()
 
