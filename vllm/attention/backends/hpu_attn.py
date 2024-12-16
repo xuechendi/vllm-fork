@@ -174,6 +174,7 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
         v_scale: float = 1.0,
         attn_type: str = AttentionType.DECODER,
         output: Optional[torch.Tensor] = None,
+        **kwargs,
     ) -> torch.Tensor:
         """Forward pass with xFormers and PagedAttention.
 
@@ -208,8 +209,18 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
         query = query.view(-1, self.num_heads, self.head_size)
         key = key.view(-1, self.num_kv_heads, self.head_size)
         value = value.view(-1, self.num_kv_heads, self.head_size)
-        block_indices = attn_metadata.block_indices
-        block_offsets = attn_metadata.block_offsets
+        block_indices = kwargs.get('block_indices', None)
+        block_offsets = kwargs.get('block_offsets', None)
+        seq_lens_tensor = kwargs.get('seq_lens_tensor', None)
+        attn_bias = kwargs.get('attn_bias', None)
+        if block_indices is None:
+            block_indices = attn_metadata.block_indices
+        if block_offsets is None:
+            block_offsets = attn_metadata.block_offsets
+        if seq_lens_tensor is None:
+            seq_lens_tensor = attn_metadata.seq_lens_tensor
+        if attn_bias is None:  # This is the case for prompt run
+            attn_bias = attn_metadata.attn_bias
         if attn_metadata.is_prompt:
             key = key.unflatten(0, (block_indices.size(0), -1))
             value = value.unflatten(0, (block_indices.size(0), -1))
@@ -235,7 +246,6 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                     # TODO: move this outside of model
                     assert attn_metadata.attn_bias is not None, \
                             'attn_bias must be set before calling model.forward'
-                    attn_bias = attn_metadata.attn_bias
                     if self.alibi_slopes is not None:
                         position_bias = _make_alibi_bias(
                             self.alibi_slopes, self.num_kv_heads,
@@ -256,7 +266,7 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                     matmul_qk_op=self.matmul_qk,
                     softmax_op=self.softmax,
                     matmul_av_op=self.matmul_av,
-                    valid_seq_lengths=attn_metadata.seq_lens_tensor,
+                    valid_seq_lengths=seq_lens_tensor,
                     fsdpa_op=self.fused_scaled_dot_product_attention,
                 )
             else:
