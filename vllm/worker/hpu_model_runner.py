@@ -207,21 +207,16 @@ def get_names_for_rope(model: torch.nn.Module):
 
 class HpuModelAdapter:
 
-    def __init__(self,
-                 model,
-                 block_size,
-                 dtype,
-                 enforce_eager,
-                 layer_names,
-                 recompute_cos_sin=False):
+    def __init__(self, model, block_size, dtype, enforce_eager, layer_names):
         self.model = model
         self.prefill_use_fusedsdpa = os.getenv('VLLM_PROMPT_USE_FUSEDSDPA',
                                                '1').lower() in ['1', 'true'] \
                                                 and not is_fake_hpu()
+        self.recompute_cos_sin = os.getenv('VLLM_COS_SIN_RECOMPUTE',
+                                           'false').lower() in ['1', 'true']
         self.block_size = block_size
         self.dtype = dtype
         self.layer_names = layer_names
-        self.recompute_cos_sin = recompute_cos_sin
         if not is_fake_hpu() and not htorch.utils.internal.is_lazy(
         ) and not enforce_eager:
             if os.getenv('VLLM_REGIONAL_COMPILATION',
@@ -749,8 +744,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                 get_decoder_layer_suffix(model_config.model_type if
                                          model_config is not None else None),
                 hidden_layer_markstep_interval)
-            recompute_cos_sin = os.getenv('VLLM_COS_SIN_RECOMPUTE',
-                                          'false').lower() in ['1', 'true']
             names_for_rope = get_names_for_rope(self.model)
             torch.hpu.synchronize()
 
@@ -760,8 +753,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                     self.block_size,
                     dtype=self.model_config.dtype,
                     enforce_eager=self.enforce_eager,
-                    layer_names=names_for_rope,
-                    recompute_cos_sin=recompute_cos_sin)
+                    layer_names=names_for_rope)
             msg = f"Wrapping in HPU Graph took {m_wrap.get_summary_string()}"
             logger.info(msg)
 
