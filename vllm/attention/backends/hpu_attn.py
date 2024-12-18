@@ -29,6 +29,56 @@ except ImportError:
     logger.warning("Could not import HPU FusedSDPA kernel. "
                    "vLLM will use native implementation.")
 
+def prompt_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attn_bias: Optional[torch.Tensor] = None,
+    p: float = 0.0,
+    scale: Optional[float] = None,
+    matmul_qk_op=torch.matmul,
+    softmax_op=torch.softmax,
+    matmul_av_op=torch.matmul,
+    valid_seq_lengths: Optional[torch.Tensor] = None,
+    fsdpa_op = None,
+) -> torch.Tensor:
+    query = query.transpose(1, 2)
+    key = key.transpose(1, 2)
+    value = value.transpose(1, 2)
+    query_heads = query.size(1)
+    kv_heads = key.size(1)
+    if attn_bias is not None:
+        attn_bias = attn_bias.expand(query.size(0), query_heads, query.size(2), key.size(2))
+    if attn_bias is not None or fsdpa_op is None:
+        if query_heads != kv_heads:
+            query = query.unflatten(1, (kv_heads, -1))
+            key = key.unflatten(1, (kv_heads, 1))
+            value = value.unflatten(1, (kv_heads, 1))
+            if attn_bias is not None:
+                attn_bias = attn_bias.unflatten(1, (kv_heads, -1))
+        attn_weights = matmul_qk_op(query * scale, key.transpose(-1, -2))
+        if attn_bias is not None:
+            attn_weights.add_(attn_bias)
+        attn_weights = softmax_op(attn_weights, dim=-1)
+        attn_weights = matmul_av_op(attn_weights, value)
+        if query_heads != kv_heads:
+            attn_weights = attn_weights.flatten(1, 2)
+    else:
+        VLLM_DO_NOT_REMOVE_REPEAT_KV_CACHE = os.environ.get('VLLM_REMOVE_REPEAT_KV_CACHE', '1') == '1'
+        # TODO: remove after fusedsdpa fix for query_heads != kv_heads
+        if query_heads != kv_heads:
+            if VLLM_DO_NOT_REMOVE_REPEAT_KV_CACHE:
+                key = ops.repeat_kv(key, int(query_heads // kv_heads))
+                value = ops.repeat_kv(value, int(query_heads // kv_heads))
+            if attn_bias is not None:
+                attn_bias = attn_bias.unflatten(1, (kv_heads, -1))
+        softmax_mode = 'fast'
+        recompute_mode = True
+        attn_weights = fsdpa_op(query=query, key=key, value=value, attn_mask=attn_bias, dropout_p=0.0, is_causal=True,
+                                       scale=scale, softmax_mode=softmax_mode, recompute_mode=recompute_mode,
+                                       valid_sequence_lengths=valid_seq_lengths, padding_side='right')
+    attn_weights = attn_weights.transpose(1, 2)
+    return attn_weights
 
 class HPUAttentionBackend(AttentionBackend):
 
@@ -228,8 +278,10 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             if attn_metadata.is_prompt:
                 padded_shape = attn_metadata.input_tokens_padded_tensor
                 seq_lens_tensor_list = seq_lens_tensor.tolist()
-                padded_key_tensor = torch.zeros(padded_shape[0], padded_shape[1], self.num_kv_heads, self.head_size, device=key.device, dtype=key.dtype)
-                padded_value_tensor = torch.zeros(padded_shape[0], padded_shape[1], self.num_kv_heads, self.head_size, device=query.device, dtype=key.dtype)
+                padded_key_tensor = torch.zeros((padded_shape[0], padded_shape[1], self.num_kv_heads, self.head_size),
+                                                device=key.device, dtype=key.dtype)
+                padded_value_tensor = torch.zeros((padded_shape[0], padded_shape[1], self.num_kv_heads, self.head_size),
+                                                  device=query.device, dtype=key.dtype)
                 start = 0
                 # we need to copy the key and value tensors to the padded tensors
                 # shape is [bacth_size, entire_seq_len, num_kv_heads, head_size]
@@ -284,11 +336,16 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                         attn_bias = attn_bias.tile(
                             (1, self.num_kv_heads, 1, 1))
                         attn_bias.add_(position_bias)
+                elif enable_merged_prefill:
+                    pass
                 else:
                     attn_bias = None
 
-                #self.fused_scaled_dot_product_attention = None
-                out = ops.prompt_attention(
+                if enable_merged_prefill:
+                    prompt_attn_func = prompt_attention
+                else:
+                    prompt_attn_func = ops.prompt_attention
+                out = prompt_attn_func(
                     query.view(query_shape),
                     key.view(kv_shape),
                     value.view(kv_shape),
