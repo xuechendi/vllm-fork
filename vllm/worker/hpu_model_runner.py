@@ -212,6 +212,8 @@ class HpuModelAdapter:
         self.prefill_use_fusedsdpa = os.getenv('VLLM_PROMPT_USE_FUSEDSDPA',
                                                '1').lower() in ['1', 'true'] \
                                                 and not is_fake_hpu()
+        self.merged_prefill_attn_mask_compute = os.getenv('VLLM_MERGED_PREFILL_ATTN_MASK_COMPUTE',
+                                               '1').lower() in ['1', 'true']
         self.block_size = block_size
         self.dtype = dtype
         self.layer_names = layer_names
@@ -287,6 +289,28 @@ class HpuModelAdapter:
         attn_metadata = prefill_metadata._replace(attn_bias=attn_bias)
         return attn_metadata
 
+    def _set_merged_attn_bias(self, attn_metadata, batch_size, max_seq_len, device,):# create a 2D causal attn mask to ensure I can only attend to the past
+        if attn_metadata is None or not attn_metadata.is_prompt:
+            return attn_metadata
+        if not self.merged_prefill_attn_mask_compute:
+            return attn_metadata
+        #TODO: Support batch_size > 1
+        seq_lens = attn_metadata.seq_lens_tensor.tolist()
+        causal_attn_mask_tensor = torch.ones((batch_size, max_seq_len, max_seq_len), dtype=torch.bool, device=device)
+        start = 0
+        for i in range(batch_size):
+            for seq_len in seq_lens:
+                # create triangular mask for each sequence
+                causal_mask = torch.triu(torch.ones((seq_len, seq_len), device=device, dtype=torch.bool), diagonal=1)
+                causal_attn_mask_tensor[i][start:start+seq_len, start:start+seq_len].copy_(causal_mask)
+                start += seq_len
+        causal_attn_mask_tensor = (torch.zeros_like(causal_attn_mask_tensor, device=device, dtype=self.dtype).masked_fill_(
+            causal_attn_mask_tensor, -10000)) # should be math(-inf) but -10000 is used for numerical stability
+        causal_attn_mask_tensor = causal_attn_mask_tensor.view(causal_attn_mask_tensor.shape[0], 1, causal_attn_mask_tensor.shape[1], causal_attn_mask_tensor.shape[2])
+
+        attn_metadata = attn_metadata._replace(attn_bias=causal_attn_mask_tensor)
+        return attn_metadata
+
     def _set_block_mapping(self, metadata, batch_size, device, dtype):
         mask = torch.arange(0,
                             self.block_size,
@@ -340,7 +364,9 @@ class HpuModelAdapter:
 
     def _update_metadata(self, attn_metadata, batch_size, seq_len, device,
                          dtype):
-        if attn_metadata.is_prompt:
+        if attn_metadata.is_prompt and attn_metadata.enable_merged_prefill:
+            attn_metadata = self._set_merged_attn_bias(attn_metadata, batch_size, seq_len, device)
+        elif attn_metadata.is_prompt:
             attn_metadata = self._set_attn_bias(attn_metadata, batch_size,
                                                 seq_len, device, dtype)
         else:
@@ -886,8 +912,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                 block_number = block_table[i // self.block_size]
                 block_offset = i % self.block_size
                 slot = block_number * self.block_size + block_offset
-                slot_mapping[-1].append(slot)  
-        
+                slot_mapping[-1].append(slot)
+
         max_query_len = max(query_lens)
         real_num_seqs = len(query_lens)
         assert max_query_len > 0
