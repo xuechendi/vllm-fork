@@ -1143,33 +1143,36 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         real_num_seqs = len(total_query_lens)
         assert max_query_len > 0
         
-        print(">>>> seq_lens", seq_lens, "max_query_len", max_query_len, "real_num_seqs", real_num_seqs)
-
-        max_prompt_len = max(
+        merged_prompt_len = max(
             self.bucketing_ctx.get_padded_prompt_seq_len(max(total_seq_lens)),
+            self.block_size)
+        max_prompt_len = max(
+            self.bucketing_ctx.get_padded_prompt_seq_len(max(seq_lens)),
             self.block_size)
 
         prefix_block_list_tensor = None
 
         input_tokens_tensor = make_tensor_with_pad(input_tokens_merged,
-                                                   max_len=max_prompt_len,
+                                                   max_len=merged_prompt_len,
                                                    pad=0,
                                                    dtype=torch.long,
                                                    device='cpu')
 
         input_positions = make_tensor_with_pad(input_positions_merged,
-                                               max_len=max_prompt_len,
+                                               max_len=merged_prompt_len,
                                                pad=0,
                                                dtype=torch.long,
                                                device='cpu')
+        
+        input_tokens_padded_tensor = torch.tensor([len(seq_lens), max_prompt_len], dtype=torch.long, device='cpu')
 
-        slot_mapping = make_tensor_with_pad(slot_mapping_merged,
+        slot_mapping = make_tensor_with_pad(slot_mapping,
                                             max_len=max_prompt_len,
                                             pad=_PAD_SLOT_ID,
                                             dtype=torch.long,
                                             device='cpu')
 
-        seq_lens_tensor = torch.tensor(total_seq_lens,
+        seq_lens_tensor = torch.tensor(seq_lens,
                                        dtype=torch.long,
                                        device='cpu')
 
@@ -1189,9 +1192,11 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         seq_lens_tensor = seq_lens_tensor.to(self.device, non_blocking=True)
         context_lens_tensor = context_lens_tensor.to(self.device,
                                                      non_blocking=True)
-
+        input_tokens_padded_tensor = input_tokens_padded_tensor.to(self.device,
+                                                     non_blocking=True)
         attn_metadata = self.attn_backend.make_metadata(
             is_prompt=True,
+            enable_merged_prefill=True,
             block_list=prefix_block_list_tensor,
             block_mapping=None,
             block_usage=None,
@@ -1207,6 +1212,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             num_prefill_tokens=num_prefill_tokens,
             num_decode_tokens=0,
             slot_mapping=slot_mapping,
+            input_tokens_padded_tensor=input_tokens_padded_tensor,
             multi_modal_placeholder_index_maps=
             None  # FIXME(kzawora): mutli-modality will not work here
         )
@@ -1593,6 +1599,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             'attn_bias',
             'seq_lens_tensor',
             'context_lens_tensor',
+            'enable_merged_prefill',
+            'input_tokens_padded_tensor',
             'block_list',
             'block_mapping',
             'block_usage',
@@ -1713,7 +1721,10 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             profiler = setup_profiler()
             profiler.start()
         for _ in range(times):
+            origin_enable_merged_prefill = self.enable_merged_prefill
+            self.enable_merged_prefill = False
             inputs = self.prepare_model_input(seqs)
+            self.enable_merged_prefill = origin_enable_merged_prefill
             is_single_step = \
                 self.vllm_config.scheduler_config.num_scheduler_steps == 1
             if is_prompt or is_single_step:
