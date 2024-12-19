@@ -302,7 +302,7 @@ class HpuModelAdapter:
             for seq_len in seq_lens:
                 # create triangular mask for each sequence
                 causal_mask = torch.triu(torch.ones((seq_len, seq_len), device=device, dtype=torch.bool), diagonal=1)
-                causal_attn_mask_tensor[i][start:start+seq_len, start:start+seq_len].copy_(causal_mask)
+                causal_attn_mask_tensor[i][start:start+seq_len, start:start+seq_len].logical_and_(causal_mask)
                 start += seq_len
         causal_attn_mask_tensor = (torch.zeros_like(causal_attn_mask_tensor, device=device, dtype=self.dtype).masked_fill_(
             causal_attn_mask_tensor, -10000)) # should be math(-inf) but -10000 is used for numerical stability
