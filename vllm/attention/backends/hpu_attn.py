@@ -10,6 +10,7 @@ import torch
 import vllm_hpu_extension.ops as ops
 from vllm_hpu_extension.utils import (Matmul, ModuleFusedSDPA, Softmax,
                                       VLLMKVCache)
+from vllm_hpu_extension.cache_ops import insert_or_update_cache
 
 from vllm.attention.backends.abstract import (AttentionBackend, AttentionImpl,
                                               AttentionMetadata, AttentionType)
@@ -47,15 +48,14 @@ def prompt_attention(
     value = value.transpose(1, 2)
     query_heads = query.size(1)
     kv_heads = key.size(1)
-    if attn_bias is not None:
-        attn_bias = attn_bias.expand(query.size(0), query_heads, query.size(2), key.size(2))
     if attn_bias is not None or fsdpa_op is None:
+    #if fsdpa_op is None:
         if query_heads != kv_heads:
             query = query.unflatten(1, (kv_heads, -1))
             key = key.unflatten(1, (kv_heads, 1))
             value = value.unflatten(1, (kv_heads, 1))
             if attn_bias is not None:
-                attn_bias = attn_bias.unflatten(1, (kv_heads, -1))
+                attn_bias = attn_bias.unsqueeze(1)
         attn_weights = matmul_qk_op(query * scale, key.transpose(-1, -2))
         if attn_bias is not None:
             attn_weights.add_(attn_bias)
@@ -71,14 +71,32 @@ def prompt_attention(
                 key = ops.repeat_kv(key, int(query_heads // kv_heads))
                 value = ops.repeat_kv(value, int(query_heads // kv_heads))
             if attn_bias is not None:
-                attn_bias = attn_bias.unflatten(1, (kv_heads, -1))
+                attn_bias = attn_bias.unsqueeze(1)
         softmax_mode = 'fast'
         recompute_mode = True
-        attn_weights = fsdpa_op(query=query, key=key, value=value, attn_mask=attn_bias, dropout_p=0.0, is_causal=True,
+        attn_weights = fsdpa_op(query=query, key=key, value=value, attn_mask=attn_bias, dropout_p=0.0, is_causal=False,
                                        scale=scale, softmax_mode=softmax_mode, recompute_mode=recompute_mode,
-                                       valid_sequence_lengths=valid_seq_lengths, padding_side='right')
+                                       valid_sequence_lengths=None, padding_side='right')
     attn_weights = attn_weights.transpose(1, 2)
     return attn_weights
+
+
+class VLLMKVCache_dev(torch.nn.Module):
+
+    def __init__(self):
+        super(VLLMKVCache_dev, self).__init__()
+        self.use_contiguous_pa = os.environ.get('VLLM_CONTIGUOUS_PA',
+                                                'true').lower() == 'true'
+
+    def forward(self, input, cache, block_indices, block_offset):
+        insert_or_update_cache(input, cache, block_indices, block_offset)
+        return cache
+
+    def fetch_from_cache(self, cache, blocks):
+        if self.use_contiguous_pa:
+            return cache[:blocks.size(0)]
+        else:
+            return cache.index_select(0, blocks)
 
 class HPUAttentionBackend(AttentionBackend):
 
@@ -188,8 +206,8 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
         self.matmul_av = Matmul()
         self.batch2block_matmul = Matmul()
         self.block2batch_matmul = Matmul()
-        self.k_cache = VLLMKVCache()
-        self.v_cache = VLLMKVCache()
+        self.k_cache = VLLMKVCache_dev()
+        self.v_cache = VLLMKVCache_dev()
         self.fused_scaled_dot_product_attention = None if HPUFusedSDPA is None \
             else ModuleFusedSDPA(HPUFusedSDPA)
         self.num_kv_heads = num_heads if num_kv_heads is None else num_kv_heads
