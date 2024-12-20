@@ -19,6 +19,7 @@ from vllm.attention.ops.hpu_paged_attn import (HPUPagedAttention,
                                                HPUPagedAttentionMetadata)
 from vllm.logger import init_logger
 from vllm.utils import is_fake_hpu
+from vllm.model_executor.models.utils import split_and_pad_to_length
 
 logger = init_logger(__name__)
 
@@ -29,28 +30,6 @@ try:
 except ImportError:
     logger.warning("Could not import HPU FusedSDPA kernel. "
                    "vLLM will use native implementation.")
-
-def split_and_pad_to_length(input, target_length, seq_lens_tensor_list):
-    # we need to copy the key and value tensors to the padded tensors
-    # shape is [bacth_size, entire_seq_len, num_kv_heads, head_size]
-    padded_list = torch.split_with_sizes(input[:sum(seq_lens_tensor_list)], seq_lens_tensor_list, dim=0)
-
-    padded_tensor = torch.nn.utils.rnn.pad_sequence(padded_list, batch_first=True)
-    p3d = (0, 0, 0, 0, 0, target_length - padded_tensor.size(1))
-    padded_tensor = torch.nn.functional.pad(padded_tensor, p3d, value=0)
-    return padded_tensor
-
-def split_and_pad_to_length_2(input, target_length, seq_lens_tensor_list):
-    # we need to copy the key and value tensors to the padded tensors
-    # shape is [bacth_size, entire_seq_len, num_kv_heads, head_size]
-    padded_tensor = torch.zeros((len(seq_lens_tensor_list), target_length, input.size(1), input.size(2)), device=input.device, dtype=input.dtype)
-
-    start = 0
-    for i in range(len(seq_lens_tensor_list)):
-        padded_tensor[i, :seq_lens_tensor_list[i], :, :] = input[start: start + seq_lens_tensor_list[i], :, :]
-        start = start + seq_lens_tensor_list[i]
-
-    return padded_tensor
 
 def prompt_attention(
     query: torch.Tensor,
@@ -306,8 +285,6 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                 padded_key_tensor = padded_key_tensor.flatten(0, 1).unflatten(0, (block_indices.size(0), -1))
                 padded_value_tensor = padded_value_tensor.flatten(0, 1).unflatten(0, (block_indices.size(0), -1))
 
-                #seq_lens_tensor_merged = torch.tensor(sum(seq_lens_tensor_list), device=seq_lens_tensor.device, dtype=seq_lens_tensor.dtype).unsqueeze(0)
-                seq_lens_tensor_merged = seq_lens_tensor
             if kv_cache is not None:
                 key_cache, value_cache = HPUPagedAttention.split_kv_cache(
                     kv_cache, self.num_kv_heads, self.head_size)
@@ -320,7 +297,6 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             if attn_metadata.is_prompt:
                 key = key.unflatten(0, (block_indices.size(0), -1))
                 value = value.unflatten(0, (block_indices.size(0), -1))
-                seq_lens_tensor_merged = seq_lens_tensor
             if kv_cache is not None:
                 key_cache, value_cache = HPUPagedAttention.split_kv_cache(
                     kv_cache, self.num_kv_heads, self.head_size)
@@ -369,7 +345,7 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                     matmul_qk_op=self.matmul_qk,
                     softmax_op=self.softmax,
                     matmul_av_op=self.matmul_av,
-                    valid_seq_lengths=seq_lens_tensor_merged,
+                    valid_seq_lengths=seq_lens_tensor,
                     fsdpa_op=self.fused_scaled_dot_product_attention,
                 )
             else:

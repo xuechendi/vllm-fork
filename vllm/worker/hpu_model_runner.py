@@ -1168,6 +1168,9 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         max_query_len = max(total_query_lens)
         real_num_seqs = len(total_query_lens)
         assert max_query_len > 0
+
+        # print("input_tokens_merged: ", input_tokens_merged)
+        # print("input_positions_merged: ", input_positions_merged)
         
         merged_prompt_len = max(
             self.bucketing_ctx.get_padded_prompt_seq_len(max(total_seq_lens)),
