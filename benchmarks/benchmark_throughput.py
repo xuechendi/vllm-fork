@@ -159,6 +159,8 @@ def sample_requests(tokenizer: PreTrainedTokenizerBase,
                           expected_output_len=output_len,
                           multi_modal_data=multi_modal_data))
 
+    for i, data in enumerate(filtered_dataset):
+        print(i, data.prompt)
     return filtered_dataset
 
 

@@ -1189,8 +1189,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                                                pad=0,
                                                dtype=torch.long,
                                                device='cpu')
-        
-        input_tokens_padded_tensor = torch.tensor([len(seq_lens), max_prompt_len], dtype=torch.long, device='cpu')
 
         slot_mapping = make_tensor_with_pad(slot_mapping,
                                             max_len=max_prompt_len,
@@ -1218,8 +1216,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         seq_lens_tensor = seq_lens_tensor.to(self.device, non_blocking=True)
         context_lens_tensor = context_lens_tensor.to(self.device,
                                                      non_blocking=True)
-        input_tokens_padded_tensor = input_tokens_padded_tensor.to(self.device,
-                                                     non_blocking=True)
         attn_metadata = self.attn_backend.make_metadata(
             is_prompt=True,
             enable_merged_prefill=True,
@@ -1238,7 +1234,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             num_prefill_tokens=num_prefill_tokens,
             num_decode_tokens=0,
             slot_mapping=slot_mapping,
-            input_tokens_padded_tensor=input_tokens_padded_tensor,
             multi_modal_placeholder_index_maps=
             None  # FIXME(kzawora): mutli-modality will not work here
         )
@@ -1626,7 +1621,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             'seq_lens_tensor',
             'context_lens_tensor',
             'enable_merged_prefill',
-            'input_tokens_padded_tensor',
             'block_list',
             'block_mapping',
             'block_usage',

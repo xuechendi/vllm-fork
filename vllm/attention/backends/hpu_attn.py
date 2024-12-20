@@ -30,6 +30,28 @@ except ImportError:
     logger.warning("Could not import HPU FusedSDPA kernel. "
                    "vLLM will use native implementation.")
 
+def split_and_pad_to_length(input, target_length, seq_lens_tensor_list):
+    # we need to copy the key and value tensors to the padded tensors
+    # shape is [bacth_size, entire_seq_len, num_kv_heads, head_size]
+    padded_list = torch.split_with_sizes(input[:sum(seq_lens_tensor_list)], seq_lens_tensor_list, dim=0)
+
+    padded_tensor = torch.nn.utils.rnn.pad_sequence(padded_list, batch_first=True)
+    p3d = (0, 0, 0, 0, 0, target_length - padded_tensor.size(1))
+    padded_tensor = torch.nn.functional.pad(padded_tensor, p3d, value=0)
+    return padded_tensor
+
+def split_and_pad_to_length_2(input, target_length, seq_lens_tensor_list):
+    # we need to copy the key and value tensors to the padded tensors
+    # shape is [bacth_size, entire_seq_len, num_kv_heads, head_size]
+    padded_tensor = torch.zeros((len(seq_lens_tensor_list), target_length, input.size(1), input.size(2)), device=input.device, dtype=input.dtype)
+
+    start = 0
+    for i in range(len(seq_lens_tensor_list)):
+        padded_tensor[i, :seq_lens_tensor_list[i], :, :] = input[start: start + seq_lens_tensor_list[i], :, :]
+        start = start + seq_lens_tensor_list[i]
+
+    return padded_tensor
+
 def prompt_attention(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -74,9 +96,9 @@ def prompt_attention(
                 attn_bias = attn_bias.unsqueeze(1)
         softmax_mode = 'fast'
         recompute_mode = True
-        attn_weights = fsdpa_op(query=query, key=key, value=value, attn_mask=attn_bias, dropout_p=0.0, is_causal=False,
-                                       scale=scale, softmax_mode=softmax_mode, recompute_mode=recompute_mode,
-                                       valid_sequence_lengths=None, padding_side='right')
+        attn_weights = fsdpa_op(query, key, value, attn_bias, 0.0, False,
+                                       scale, softmax_mode, recompute_mode,
+                                       None, 'right')
     attn_weights = attn_weights.transpose(1, 2)
     return attn_weights
 
@@ -134,7 +156,6 @@ class HPUAttentionMetadata(HPUPagedAttentionMetadata, AttentionMetadata):
     seq_lens_tensor: Optional[torch.Tensor]
     context_lens_tensor: Optional[torch.Tensor]
     enable_merged_prefill: bool = False
-    input_tokens_padded_tensor: Optional[torch.Tensor] = None
     seq_lens: Optional[List[int]] = None
     encoder_seq_lens: Optional[List[int]] = None
     encoder_seq_lens_tensor: Optional[torch.Tensor] = None
@@ -276,24 +297,17 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             attn_bias = attn_metadata.attn_bias
         if enable_merged_prefill:
             if attn_metadata.is_prompt:
-                padded_shape = attn_metadata.input_tokens_padded_tensor
-                seq_lens_tensor_list = seq_lens_tensor.tolist()
-                padded_key_tensor = torch.zeros((padded_shape[0], padded_shape[1], self.num_kv_heads, self.head_size),
-                                                device=key.device, dtype=key.dtype)
-                padded_value_tensor = torch.zeros((padded_shape[0], padded_shape[1], self.num_kv_heads, self.head_size),
-                                                  device=query.device, dtype=key.dtype)
-                start = 0
+                max_len=attn_metadata.slot_mapping.size(1)
+                seq_lens_tensor_list = attn_metadata.seq_lens_tensor.tolist()
                 # we need to copy the key and value tensors to the padded tensors
                 # shape is [bacth_size, entire_seq_len, num_kv_heads, head_size]
-                for i in range(padded_shape[0]):
-                    padded_key_tensor[i, :seq_lens_tensor_list[i]].copy_(key[start: start + seq_lens_tensor_list[i], :, :], non_blocking=True)
-                    padded_value_tensor[i, :seq_lens_tensor_list[i]].copy_(value[start: start + seq_lens_tensor_list[i], :, :], non_blocking=True)
-                    start = start + seq_lens_tensor_list[i]
-                # shape will be [batch_size * entire_seq_len, num_kv_heads, head_size]
-                # then reshape it to [n_blocks, block_size, num_kv_heads * head_size]
+                padded_key_tensor = split_and_pad_to_length(key, max_len, seq_lens_tensor_list)
+                padded_value_tensor = split_and_pad_to_length(value, max_len, seq_lens_tensor_list)
                 padded_key_tensor = padded_key_tensor.flatten(0, 1).unflatten(0, (block_indices.size(0), -1))
                 padded_value_tensor = padded_value_tensor.flatten(0, 1).unflatten(0, (block_indices.size(0), -1))
-                seq_lens_tensor_merged = torch.tensor(sum(seq_lens_tensor_list), device=seq_lens_tensor.device, dtype=seq_lens_tensor.dtype).unsqueeze(0)
+
+                #seq_lens_tensor_merged = torch.tensor(sum(seq_lens_tensor_list), device=seq_lens_tensor.device, dtype=seq_lens_tensor.dtype).unsqueeze(0)
+                seq_lens_tensor_merged = seq_lens_tensor
             if kv_cache is not None:
                 key_cache, value_cache = HPUPagedAttention.split_kv_cache(
                     kv_cache, self.num_kv_heads, self.head_size)
