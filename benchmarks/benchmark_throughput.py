@@ -88,7 +88,7 @@ def sample_requests(tokenizer: PreTrainedTokenizerBase,
     # Filter out the conversations with less than 2 turns.
     dataset = [data for data in dataset if len(data["conversations"]) >= 2]
     # Shuffle the dataset.
-    random.shuffle(dataset)        
+    #random.shuffle(dataset)        
 
     # Filter out sequences that are too long or too short
     filtered_dataset: List[SampleRequest] = []
@@ -189,7 +189,7 @@ def run_vllm(
     use_beam_search = False
 
     if not use_beam_search:
-        for _ in range(2):
+        for _ in range(3):
             start = time.perf_counter()
             llm.generate(prompts, sampling_params, use_tqdm=True)
             end = time.perf_counter()
