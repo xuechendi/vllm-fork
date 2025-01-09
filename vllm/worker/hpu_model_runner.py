@@ -461,7 +461,11 @@ class HpuModelAdapter:
                   "selected_token_indices: ", selected_token_indices.shape)
         hidden_states = self.model(*args, **kwargs)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        hidden_states = hidden_states.index_select(0, selected_token_indices)
+        if kwargs['attn_metadata'].enable_merged_prefill:
+            non_zero_indices = torch.nonzero(selected_token_indices).squeeze()
+            hidden_states = hidden_states.index_select(0, selected_token_indices[non_zero_indices])
+        else:
+            hidden_states = hidden_states.index_select(0, selected_token_indices)
         return hidden_states
 
     def compute_logits(self, *args, **kwargs):
