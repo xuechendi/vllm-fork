@@ -30,6 +30,9 @@ logger = init_logger(__name__)
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
 
+if current_platform.is_cuda():
+    from vllm.device_allocator.cumem import CuMemAllocator
+
 
 class Worker(WorkerBase):
 
@@ -88,7 +91,8 @@ class Worker(WorkerBase):
         allocator.wake_up(tags)
 
     def init_device(self):
-        if self.device_config.device.type == "cuda":
+        if self.device_config.device.type == "cuda" or \
+            self.device_config.device.type == "xpu":
             # torch.distributed.all_reduce does not free the input tensor until
             # the synchronization point. This causes the memory usage to grow
             # as the number of all_reduce calls increases. This env var disables
@@ -99,20 +103,22 @@ class Worker(WorkerBase):
 
             # This env var set by Ray causes exceptions with graph building.
             os.environ.pop("NCCL_ASYNC_ERROR_HANDLING", None)
-            self.device = torch.device(f"cuda:{self.local_rank}")
+            self.device = torch.device(
+                f"{current_platform.device_name}:{self.local_rank}")
             torch.cuda.set_device(self.device)
 
             _check_if_gpu_supports_dtype(self.model_config.dtype)
             gc.collect()
             torch.cuda.empty_cache()
             self.init_gpu_memory = torch.cuda.mem_get_info()[0]
+            backend = current_platform.dist_backend
         else:
             raise RuntimeError(
                 f"Not support device type: {self.device_config.device}")
         # Initialize the distributed environment.
         init_worker_distributed_environment(self.parallel_config, self.rank,
                                             self.distributed_init_method,
-                                            self.local_rank)
+                                            self.local_rank, backend)
         # Set random seed.
         set_random_seed(self.model_config.seed)
 
@@ -289,12 +295,13 @@ def init_worker_distributed_environment(
     rank: int,
     distributed_init_method: Optional[str] = None,
     local_rank: int = -1,
+    backend: str = "nccl",
 ) -> None:
     """Initialize the distributed environment."""
     set_custom_all_reduce(not parallel_config.disable_custom_all_reduce)
 
     init_distributed_environment(parallel_config.world_size, rank,
-                                 distributed_init_method, local_rank)
+                                 distributed_init_method, local_rank, backend)
 
     ensure_model_parallel_initialized(parallel_config.tensor_parallel_size,
                                       parallel_config.pipeline_parallel_size)

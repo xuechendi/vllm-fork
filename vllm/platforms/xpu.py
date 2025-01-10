@@ -23,6 +23,7 @@ class XPUPlatform(Platform):
     device_name: str = "xpu"
     device_type: str = "xpu"
     dispatch_key: str = "XPU"
+    dist_backend: str = "ccl"
     # Intel XPU's device key is "GPU" for Ray.
     # see https://github.com/ray-project/ray/blob/6a5eb5865eeb9ccf058a79b44f107e327e360673/python/ray/_private/accelerators/intel_gpu.py#L20 # noqa: E501
     ray_device_key: str = "GPU"
@@ -33,21 +34,14 @@ class XPUPlatform(Platform):
                              dtype: torch.dtype, kv_cache_dtype: Optional[str],
                              block_size: int, use_v1: bool,
                              use_mla: bool) -> str:
-        if selected_backend not in [_Backend.IPEX, _Backend.IPEX_V1]:
-            logger.warning_once(
-                f"Cannot use {selected_backend} backend on XPU.")
+        if selected_backend != _Backend.IPEX:
+            logger.info("Cannot use %s backend on XPU.", selected_backend)
         use_v1 = envs.VLLM_USE_V1
         if use_v1:
-            if selected_backend == _Backend.IPEX:
-                logger.warning_once("For v1 on XPU, should use "
-                                    "IPEX_V1 attention backend.")
-            logger.info_once("Using IPEX_V1 attention backend.")
+            logger.info("Using IPEX_V1 attention backend.")
             return "vllm.v1.attention.backends.ipex_attn.IPEXAttentionBackend"
         else:
-            if selected_backend == _Backend.IPEX:
-                logger.warning_once("For v0 on XPU, should use "
-                                    "IPEX attention backend.")
-            logger.info_once("Using IPEX attention backend.")
+            logger.info("Using IPEX attention backend.")
             return "vllm.attention.backends.ipex_attn.IpexAttnBackend"
 
     @staticmethod
@@ -81,6 +75,9 @@ class XPUPlatform(Platform):
     @classmethod
     def check_and_update_config(cls, vllm_config: VllmConfig) -> None:
         cache_config = vllm_config.cache_config
+        # in V1(or with ipex chunked prefill) block_size is 64
+        if cache_config and envs.VLLM_USE_V1:
+            cache_config.block_size = 64
         if cache_config and cache_config.block_size is None:
             if envs.VLLM_USE_V1:
                 cache_config.block_size = 64
@@ -100,16 +97,9 @@ class XPUPlatform(Platform):
 
         # check and update parallel config
         parallel_config = vllm_config.parallel_config
-        if vllm_config.speculative_config:
-            if envs.VLLM_USE_V1:
-                parallel_config.worker_cls = \
-                    "vllm.v1.worker.gpu_worker.Worker"
-            else:
-                raise NotImplementedError(
-                    "XPU v0 does not support speculative decoding")
         if envs.VLLM_USE_V1:
             parallel_config.worker_cls =\
-                "vllm.v1.worker.xpu_worker.XPUWorker"
+                "vllm.v1.worker.gpu_worker.Worker"
         else:
             parallel_config.worker_cls = "vllm.worker.xpu_worker.XPUWorker"
 
@@ -147,6 +137,12 @@ class XPUPlatform(Platform):
     def fp8_dtype(cls) -> torch.dtype:
         if envs.VLLM_XPU_FP8_DTYPE == "e4m3":
             return torch.float8_e4m3fn
+    def device_support_bf16(cls) -> bool:
+        device_name = cls.get_device_name().lower()
+        if cls.is_client_gpu():
+            return False
+        elif cls.is_data_center_gpu():
+            return True
         else:
             return torch.float8_e5m2
 
@@ -154,6 +150,16 @@ class XPUPlatform(Platform):
     def is_data_center_gpu(cls) -> bool:
         device_name = cls.get_device_name().lower()
         return device_name.count("data center gpu") > 0
+
+    @classmethod
+    def is_data_center_gpu(cls) -> bool:
+        device_name = cls.get_device_name().lower()
+        return device_name.count("data center gpu") > 0
+
+    @classmethod
+    def is_client_gpu(cls) -> bool:
+        device_name = cls.get_device_name().lower()
+        return device_name.count("arc") > 0
 
     @classmethod
     def get_device_communicator_cls(cls) -> str:
