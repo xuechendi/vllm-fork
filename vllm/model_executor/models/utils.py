@@ -666,3 +666,25 @@ def extract_layer_index(layer_name: str) -> int:
     assert len(int_vals) == 1, (f"layer name {layer_name} should"
                                 " only contain one integer")
     return int_vals[0]
+
+def mask_select(input, mask):
+    print("input shape is ", input.shape, "mask is ", mask.shape)
+    if input.dim() == 1:
+        selected = torch.masked_select(input, mask)
+    else:
+        input_shape = input.shape
+        mask_2D = mask.unsqueeze(1).expand(-1, *input_shape[1:])
+        selected = torch.masked_select(input, mask_2D).view(-1, *input_shape[1:])
+    print("mask_selected shape is ", selected.shape)
+    return selected
+
+def merged_to_batch(input, padded_tensor, batch_indices, batch_offsets):
+    input = input.flatten(0, 1)
+    padded_tensor.index_put_((batch_indices, batch_offsets), input)
+    return padded_tensor
+
+def batch_to_merged(input, merge_indices):
+    merged_indices = merge_indices.flatten()
+    mask = (merged_indices == 0)
+    input = mask_select(input.view(-1, *input.shape[2:]), mask)
+    return input.unflatten(0, (1, -1))

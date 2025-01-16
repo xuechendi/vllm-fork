@@ -30,40 +30,6 @@ except ImportError:
                    "vLLM will use native implementation.")
 
 
-def prompt_fsdpa(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attn_bias: Optional[torch.Tensor] = None,
-    p: float = 0.0,
-    scale: Optional[float] = None,
-    matmul_qk_op=torch.matmul,
-    softmax_op=torch.softmax,
-    matmul_av_op=torch.matmul,
-    valid_seq_lengths: Optional[torch.Tensor] = None,
-    fsdpa_op=None,
-) -> torch.Tensor:
-    query = query.transpose(1, 2)
-    key = key.transpose(1, 2)
-    value = value.transpose(1, 2)
-    query_heads = query.size(1)
-    kv_heads = key.size(1)
-    VLLM_DO_NOT_REMOVE_REPEAT_KV_CACHE = os.environ.get(
-        'VLLM_REMOVE_REPEAT_KV_CACHE', '1') == '1'
-    # TODO: remove after fusedsdpa fix for query_heads != kv_heads
-    if query_heads != kv_heads:
-        if VLLM_DO_NOT_REMOVE_REPEAT_KV_CACHE:
-            key = ops.repeat_kv(key, int(query_heads // kv_heads))
-            value = ops.repeat_kv(value, int(query_heads // kv_heads))
-    softmax_mode = 'fast'
-    recompute_mode = True
-    attn_weights = fsdpa_op(query, key, value, attn_bias, 0.0, False,
-                            scale, softmax_mode, recompute_mode, None,
-                            'right')
-    attn_weights = attn_weights.transpose(1, 2)
-    return attn_weights
-
-
 class HPUAttentionBackend(AttentionBackend):
 
     @staticmethod
@@ -107,7 +73,6 @@ class HPUAttentionBackend(AttentionBackend):
     ) -> None:
         HPUPagedAttention.copy_blocks(kv_caches, src_to_dsts)
 
-
 @dataclass
 class HPUAttentionMetadata(HPUPagedAttentionMetadata, AttentionMetadata):
     """Metadata for HPUAttentionbackend."""
@@ -118,9 +83,10 @@ class HPUAttentionMetadata(HPUPagedAttentionMetadata, AttentionMetadata):
     seq_lens_tensor: Optional[torch.Tensor]
     context_lens_tensor: Optional[torch.Tensor]
     enable_merged_prefill: bool = False
-    actual_num_prefills: Optional[torch.Tensor] = None
-    repeated_idx_tensor: Optional[torch.Tensor] = None
     seq_lens: Optional[List[int]] = None
+    seq_indices: Optional[List[int]] = None
+    batch_indices: Optional[List[int]] = None
+    batch_offsets: Optional[List[int]] = None
     encoder_seq_lens: Optional[List[int]] = None
     encoder_seq_lens_tensor: Optional[torch.Tensor] = None
     cross_block_indices: Optional[torch.Tensor] = None
@@ -250,7 +216,6 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
         block_offsets = kwargs.get('block_offsets', None)
         seq_lens_tensor = kwargs.get('seq_lens_tensor', None)
         attn_bias = kwargs.get('attn_bias', None)
-        enable_merged_prefill = attn_metadata.enable_merged_prefill
         if block_indices is None:
             block_indices = attn_metadata.block_indices
         if block_offsets is None:
@@ -259,7 +224,7 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             seq_lens_tensor = attn_metadata.seq_lens_tensor
         if attn_bias is None:  # This is the case for prompt run
             attn_bias = attn_metadata.attn_bias
-        if attn_metadata.is_prompt and not enable_merged_prefill:
+        if attn_metadata.is_prompt:
             key = key.unflatten(0, (block_indices.size(0), -1))
             value = value.unflatten(0, (block_indices.size(0), -1))
         if kv_cache is not None:
@@ -270,10 +235,9 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             # If kv_cache is not provided, the new key and value tensors are
             # not cached. This happens during the initial memory profiling run.
             key_cache = self.k_cache(key, key_cache, block_indices,
-                                    block_offsets)
+                                     block_offsets)
             value_cache = self.v_cache(value, value_cache, block_indices,
-                                    block_offsets)
-
+                                       block_offsets)
         if attn_metadata.is_prompt:
             # Prompt run.
             query_shape = (batch_size, seq_len, self.num_heads, self.head_size)
@@ -291,16 +255,10 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
                         attn_bias = attn_bias.tile(
                             (1, self.num_kv_heads, 1, 1))
                         attn_bias.add_(position_bias)
-                elif enable_merged_prefill:
-                    pass
                 else:
                     attn_bias = None
 
-                if enable_merged_prefill and self.prefill_use_fusedsdpa:
-                    prompt_attn_func = prompt_fsdpa
-                else:
-                    prompt_attn_func = ops.prompt_attention
-                out = prompt_attn_func(
+                out = ops.prompt_attention(
                     query.view(query_shape),
                     key.view(kv_shape),
                     value.view(kv_shape),

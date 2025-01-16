@@ -57,7 +57,7 @@ from .interfaces import SupportsLoRA, SupportsPP
 from .utils import (AutoWeightsLoader, PPMissingLayer, extract_layer_index,
                     is_pp_missing_parameter,
                     make_empty_intermediate_tensors_factory, make_layers,
-                    maybe_prefix)
+                    maybe_prefix, merged_to_batch, batch_to_merged)
 
 is_hpu = current_platform.is_hpu()
 
@@ -116,7 +116,14 @@ class LlamaMLP(nn.Module):
                              "Only silu is supported for now.")
         self.act_fn = SiluAndMul()
 
-    def forward(self, x, skip_seq_split=False):
+    def forward(self, x, skip_seq_split=False, attn_metadata=None):
+        if attn_metadata.enable_merged_prefill:
+            seq_indices = attn_metadata.seq_indices
+            batch_indices = attn_metadata.batch_indices
+            batch_offsets = attn_metadata.batch_offsets
+            # convert hidden_states to merged format
+            origin_hidden_states = x
+            x = batch_to_merged(x, seq_indices)
         batch_size = x.size(0)
         seq_len = x.size(1)
         if (seq_len*batch_size)%512==0:
@@ -130,6 +137,9 @@ class LlamaMLP(nn.Module):
         x, _ = self.down_proj(x)
         if (seq_len*batch_size)%512==0:
             x = x.view(batch_size,seq_len,self.hidden_size)
+        if attn_metadata.enable_merged_prefill:
+            # convert hidden_states back to batch format
+            x = merged_to_batch(x, origin_hidden_states, batch_indices, batch_offsets)
         return x
 
 
@@ -356,7 +366,7 @@ class LlamaDecoderLayer(nn.Module):
         kv_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
         residual: Optional[torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]: 
         if isinstance(hidden_states, torch.Tensor):
             skip_split = hidden_states.size()[0] == 1
             shape_total = 1
@@ -379,10 +389,11 @@ class LlamaDecoderLayer(nn.Module):
                                            kv_cache=kv_cache,
                                            attn_metadata=attn_metadata)
 
-            # Fully Connected
+            
             hidden_states, residual = self.post_attention_layernorm(
                 hidden_states, residual)
-            hidden_states = self.mlp(hidden_states)
+            # Fully Connected
+            hidden_states = self.mlp(hidden_states, attn_metadata=attn_metadata)
         else:
             hidden_states, residual = self.try_split_forward(
                 positions, hidden_states, kv_cache, attn_metadata, residual)
