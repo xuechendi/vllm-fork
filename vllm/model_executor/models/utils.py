@@ -671,11 +671,8 @@ def extract_layer_index(layer_name: str) -> int:
 def merged_to_batch(input, padded_tensor, batch_indices, batch_offsets):
     input = input.flatten(0, 1) # (bs, seq_len, ... ) -> (bs*seq_len, ...)
     # additional row for padding
-    target_shape = padded_tensor.shape
-    ret_tensor = torch.zeros(target_shape[0] + 1, *target_shape[1:], dtype=input.dtype, device=input.device)
-    ret_tensor.index_put_((batch_indices, batch_offsets), input)
-    ret_tensor = ret_tensor[:-1]
-    return ret_tensor
+    padded_tensor.index_put_((batch_indices, batch_offsets), input)
+    return padded_tensor
 
 def batch_to_merged(input, seq_indices):
     input = input.flatten(0, 1) # (bs, seq_len, ... ) -> (bs*seq_len, ...)

@@ -19,7 +19,7 @@ from typing import (TYPE_CHECKING, Any, Callable, Dict, List, NamedTuple,
 import habana_frameworks.torch as htorch
 import habana_frameworks.torch.internal.bridge_config as bc
 import torch
-from vllm_hpu_extension.bucketing import HPUBucketingContext
+from vllm_hpu_extension.bucketing import HPUBucketingContext, generate_prompt_buckets
 from vllm_hpu_extension.ops import LoraMask as LoraMask
 from vllm_hpu_extension.ops import batch2block, block2batch
 from vllm_hpu_extension.profiler import (HabanaHighLevelProfiler,
@@ -203,6 +203,33 @@ def get_names_for_rope(model: torch.nn.Module):
             'rope_name': rope_name
         }
 
+class HPUBucketingContextWithMergedPrefill(HPUBucketingContext):
+
+    def generate_prompt_buckets(self):
+        print(
+            "HPUBucketingContextWithMergedPrefill - generate_prompt_buckets is called"
+        )
+
+        prompt_bs_bucket_cfg = self.global_state.prompt_bs_bucket_cfg
+        prompt_seq_bucket_cfg = self.global_state.prompt_seq_bucket_cfg
+
+        prompt_buckets, prompt_omitted_buckets = \
+            generate_prompt_buckets(
+            prompt_bs_bucket_cfg,
+            prompt_seq_bucket_cfg,
+            self.max_num_batched_tokens)
+
+        # for selected bucket, we need to repeat for batch_size time
+        self.global_state.prompt_buckets = []
+        for bucket in prompt_buckets:
+            bs, seq = bucket
+            self.global_state.prompt_buckets.extend([(bs, i*seq//bs) for i in range(1, bs+1)])
+        self.global_state.prompt_buckets = list(set(self.global_state.prompt_buckets))
+
+        msg = (f"Generated {len(self.global_state.prompt_buckets)} "
+               f"prompt buckets [bs, seq]: "
+               f"{list(sorted(self.global_state.prompt_buckets))}")
+        print(msg)
 
 class HpuModelAdapter:
 
@@ -387,6 +414,7 @@ class HpuModelAdapter:
             print("Warming up HPU Graph - input_ids: ", input_ids.shape,
                   "attn_bias: ", am.attn_bias.shape if am.attn_bias is not None else None,
                   "enable_merged_prefill:", am.enable_merged_prefill,
+                  'seq_lens_tensor:', am.seq_lens_tensor if am.seq_lens_tensor is not None else None,
                   "seq_indices:", am.seq_indices.shape if am.seq_indices is not None else None,
                   "batch_indices:", am.batch_indices.shape if am.batch_indices is not None else None,
                   "batch_offsets:", am.batch_offsets.shape if am.batch_offsets is not None else None,)
@@ -637,7 +665,11 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self._mem_margin: Optional[int] = None
         self.enable_merged_prefill = os.environ.get('VLLM_MERGED_PREFILL',
                                                     'false').lower() == 'true'
-        self.bucketing_ctx = HPUBucketingContext(self.max_num_seqs,
+        if self.enable_merged_prefill:
+            bucketing_ctx = HPUBucketingContextWithMergedPrefill
+        else:
+            bucketing_ctx = HPUBucketingContext
+        self.bucketing_ctx = bucketing_ctx(self.max_num_seqs,
                                                  self.max_num_prefill_seqs,
                                                  self.block_size,
                                                  self.max_num_batched_tokens)
@@ -799,8 +831,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         input_tokens: List[List[int]] = []
         input_positions: List[List[int]] = []
         slot_mapping: List[List[int]] = []
-        batch_indices: List[List[int]] = []
-        batch_offsets: List[List[int]] = []
         lora_index_mapping: List[List[int]] = []
         lora_prompt_mapping: List[List[int]] = []
         lora_requests: Set[LoRARequest] = set()
@@ -880,8 +910,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
 
             # Compute the slot mapping.
             slot_mapping.append([])
-            batch_indices.append([])
-            batch_offsets.append([])
             block_table = seq_group_metadata.block_tables[seq_id]
 
             # Mask the [0, start_idx) tokens of the prompt with _PAD_SLOT_ID,
@@ -913,8 +941,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                 block_offset = i % self.block_size
                 slot = block_number * self.block_size + block_offset
                 slot_mapping[-1].append(slot)
-                batch_indices[-1].append(idx)
-                batch_offsets[-1].append(i)
 
         max_query_len = max(query_lens)
         real_num_seqs = len(query_lens)
@@ -1005,19 +1031,31 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
 
         
         if self.enable_merged_prefill:
+            def find_not_used_slot(batch_indices, max_len):
+                not_used_slot = (-1, -1)
+                for idx, row in enumerate(batch_indices):
+                    if len(row) < max_len:
+                        not_used_slot = (idx, len(row))
+                        break
+                return not_used_slot
             batch_size = len(seq_lens)
+            batch_indices = [[i for j in range(max_prompt_len) if j < seq_lens[i]] for i in range(batch_size)]
+            batch_offsets = [[j for j in range(max_prompt_len) if j < seq_lens[i]] for i in range(batch_size)]
+            # chendi: when converting seq to batch, we will put padding tokens to one of not used batch slot
+            not_used_slot = find_not_used_slot(batch_indices, max_prompt_len)
+
             batch_indices = list(itertools.chain.from_iterable(batch_indices))
             batch_offsets = list(itertools.chain.from_iterable(batch_offsets))
-            merged_num_blocks = (len(batch_indices) // self.block_size + 1) if len(batch_indices) % self.block_size != 0 else len(batch_indices) // self.block_size
-            merged_seq_len = merged_num_blocks * self.block_size
-            batch_indices = pad_list(batch_indices, merged_seq_len, batch_size)
-            batch_offsets = pad_list(batch_offsets, merged_seq_len, 0)
-            seq_indices = [i*max_query_len + j for i in range(batch_size) for j in range(max_prompt_len) if j < seq_lens[i]]
-            seq_indices = pad_list(seq_indices, merged_seq_len, -1)
+            if not_used_slot[0] != -1:
+                batch_indices = pad_list(batch_indices, self.block_size, not_used_slot[0])
+                batch_offsets = pad_list(batch_offsets, self.block_size, not_used_slot[1])
+            seq_indices = [i*max_prompt_len + j for i in range(batch_size) for j in range(max_prompt_len) if j < seq_lens[i]]
+            seq_indices = pad_list(seq_indices, self.block_size, -1)
             
-            print("batch_indices: ", batch_indices)
-            print("batch_offsets: ", batch_offsets)
-            print("seq_indices: ", seq_indices)
+            #print("seq_lens: ", seq_lens)
+            # print("batch_indices: ", batch_indices)
+            # print("batch_offsets: ", batch_offsets)
+            # print("seq_indices: ", seq_indices)
             
             batch_indices = torch.tensor(batch_indices,
                                             dtype=torch.long,
