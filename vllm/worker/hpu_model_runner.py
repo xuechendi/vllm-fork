@@ -50,7 +50,6 @@ from vllm.sequence import (CompletionSequenceGroupOutput, IntermediateTensors,
                            SequenceOutput)
 from vllm.utils import (is_fake_hpu, is_pin_memory_available,
                         make_tensor_with_pad)
-from vllm.model_executor.models.utils import mask_select
 from vllm.worker.model_runner_base import (
     ModelRunnerBase, ModelRunnerInputBase,
     _add_attn_metadata_broadcastable_dict,
@@ -287,25 +286,6 @@ class HpuModelAdapter:
         attn_metadata = prefill_metadata._replace(attn_bias=attn_bias)
         return attn_metadata
 
-    def _set_merged_indices_offsets(self, attn_metadata):
-        batch_indices = attn_metadata.batch_indices
-        batch_offsets = attn_metadata.batch_offsets
-
-        merged_batch_indices = batch_indices.flatten()
-        merged_batch_offsets = batch_offsets.flatten()
-        mask = (merged_batch_indices >= 0)
-        merged_batch_indices = mask_select(merged_batch_indices, mask)
-        merged_batch_offsets = mask_select(merged_batch_offsets, mask)
-
-        print("batch_indices: ", merged_batch_indices)
-        print("batch_offsets: ", merged_batch_offsets)
-        print("seq_indices", attn_metadata.seq_indices)
-
-        attn_metadata = attn_metadata._replace(
-            batch_indices=merged_batch_indices,
-            batch_offsets=merged_batch_offsets,) 
-        return attn_metadata
-
     def _set_block_mapping(self, metadata, batch_size, device, dtype):
         mask = torch.arange(0,
                             self.block_size,
@@ -365,10 +345,6 @@ class HpuModelAdapter:
 
     def _update_metadata(self, attn_metadata, batch_size, seq_len, device,
                          dtype):
-        if attn_metadata.is_prompt and attn_metadata.enable_merged_prefill:
-            attn_metadata = self._set_merged_indices_offsets(
-                attn_metadata, 
-            )
         if attn_metadata.is_prompt:
             attn_metadata = self._set_attn_bias(attn_metadata, batch_size,
                                                 seq_len, device, dtype)
@@ -406,11 +382,14 @@ class HpuModelAdapter:
         LoraMask.setLoraMask(kwargs.pop('lora_mask'))
         if self.layer_names is not None:
             self._prepare_cos_sin(kwargs['positions'])
-        if kwargs['attn_metadata'].is_prompt:
+        if kwargs['attn_metadata'].is_prompt and kwargs['attn_metadata'].enable_merged_prefill:
             am = kwargs['attn_metadata']
             print("Warming up HPU Graph - input_ids: ", input_ids.shape,
                   "attn_bias: ", am.attn_bias.shape if am.attn_bias is not None else None,
-                  "enable_merged_prefill:", am.enable_merged_prefill)
+                  "enable_merged_prefill:", am.enable_merged_prefill,
+                  "seq_indices:", am.seq_indices.shape if am.seq_indices is not None else None,
+                  "batch_indices:", am.batch_indices.shape if am.batch_indices is not None else None,
+                  "batch_offsets:", am.batch_offsets.shape if am.batch_offsets is not None else None,)
         hidden_states = self.model(*args, **kwargs)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         hidden_states = hidden_states.index_select(0, selected_token_indices)
@@ -820,7 +799,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         input_tokens: List[List[int]] = []
         input_positions: List[List[int]] = []
         slot_mapping: List[List[int]] = []
-        seq_indices: List[List[int]] = []
         batch_indices: List[List[int]] = []
         batch_offsets: List[List[int]] = []
         lora_index_mapping: List[List[int]] = []
@@ -898,13 +876,10 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                 # During memory profiling, the block tables are not initialized
                 # yet. In this case, we just use a dummy slot mapping.
                 slot_mapping.append([_PAD_SLOT_ID] * seq_len)
-                seq_indices.append([-1] * seq_len)
-                batch_indices.append([-1] * seq_len)
                 continue
 
             # Compute the slot mapping.
             slot_mapping.append([])
-            seq_indices.append([])
             batch_indices.append([])
             batch_offsets.append([])
             block_table = seq_group_metadata.block_tables[seq_id]
@@ -938,7 +913,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                 block_offset = i % self.block_size
                 slot = block_number * self.block_size + block_offset
                 slot_mapping[-1].append(slot)
-                seq_indices[-1].append(0)
                 batch_indices[-1].append(idx)
                 batch_offsets[-1].append(i)
 
@@ -1004,21 +978,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                                             pad=_PAD_SLOT_ID,
                                             dtype=torch.long,
                                             device='cpu')
-        seq_indices = make_tensor_with_pad(seq_indices,
-                                             max_len=max_prompt_len,
-                                             pad=-1,
-                                             dtype=torch.long,
-                                             device='cpu')
-        batch_offsets = make_tensor_with_pad(batch_offsets,
-                                             max_len=max_prompt_len,
-                                             pad=-1,
-                                             dtype=torch.long,
-                                             device='cpu')
-        batch_indices = make_tensor_with_pad(batch_indices,
-                                                max_len=max_prompt_len,
-                                                pad=-1,
-                                                dtype=torch.long,
-                                                device='cpu')
 
         seq_lens_tensor = torch.tensor(seq_lens,
                                        dtype=torch.long,
@@ -1040,12 +999,46 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             self.device, non_blocking=True)
         slot_mapping = slot_mapping.to(  # type: ignore
             self.device, non_blocking=True)
-        seq_indices = seq_indices.to(self.device, non_blocking=True)
-        batch_offsets = batch_offsets.to(self.device, non_blocking=True)
-        batch_indices = batch_indices.to(self.device, non_blocking=True)
         seq_lens_tensor = seq_lens_tensor.to(self.device, non_blocking=True)
         context_lens_tensor = context_lens_tensor.to(self.device,
                                                      non_blocking=True)
+
+        
+        if self.enable_merged_prefill:
+            batch_size = len(seq_lens)
+            batch_indices = list(itertools.chain.from_iterable(batch_indices))
+            batch_offsets = list(itertools.chain.from_iterable(batch_offsets))
+            merged_num_blocks = (len(batch_indices) // self.block_size + 1) if len(batch_indices) % self.block_size != 0 else len(batch_indices) // self.block_size
+            merged_seq_len = merged_num_blocks * self.block_size
+            batch_indices = pad_list(batch_indices, merged_seq_len, batch_size)
+            batch_offsets = pad_list(batch_offsets, merged_seq_len, 0)
+            seq_indices = [i*max_query_len + j for i in range(batch_size) for j in range(max_prompt_len) if j < seq_lens[i]]
+            seq_indices = pad_list(seq_indices, merged_seq_len, -1)
+            
+            print("batch_indices: ", batch_indices)
+            print("batch_offsets: ", batch_offsets)
+            print("seq_indices: ", seq_indices)
+            
+            batch_indices = torch.tensor(batch_indices,
+                                            dtype=torch.long,
+                                            device='cpu')
+
+            batch_offsets = torch.tensor(batch_offsets,
+                                            dtype=torch.long,
+                                            device='cpu')
+
+            seq_indices = torch.tensor(seq_indices,
+                                    dtype=torch.long,
+                                    device='cpu')
+            
+            seq_indices = seq_indices.to(self.device, non_blocking=True)
+            batch_offsets = batch_offsets.to(self.device, non_blocking=True)
+            batch_indices = batch_indices.to(self.device, non_blocking=True)
+
+        else:
+            seq_indices = None
+            batch_offsets = None
+            batch_indices = None
 
         attn_metadata = self.attn_backend.make_metadata(
             is_prompt=True,
