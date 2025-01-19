@@ -221,14 +221,23 @@ class HPUBucketingContextWithMergedPrefill(HPUBucketingContext):
 
         # for selected bucket, we need to repeat for batch_size time
         self.global_state.prompt_buckets = []
+        buckets_info = []
         for bucket in prompt_buckets:
             bs, seq = bucket
-            self.global_state.prompt_buckets.extend([(bs, i*seq//bs) for i in range(1, bs+1)])
+            if bs * seq < self.max_num_batched_tokens:
+                if (bs + 1) * seq < self.max_num_batched_tokens:
+                    continue
+            start_msl = (seq - self.block_size) * bs if bs > 1 else seq
+            start_msl = start_msl if start_msl > 0 else self.block_size
+            end_msl = seq * bs + 1
+            buckets = [(bs, msl // bs) for msl in range(start_msl, end_msl, self.block_size)]
+            self.global_state.prompt_buckets.extend(buckets)
+            buckets_info.append({"batch_mode":(bs, seq), "merged_mode":list(range(start_msl, end_msl, self.block_size)), "calculated_buckets": buckets})
         self.global_state.prompt_buckets = list(set(self.global_state.prompt_buckets))
 
         msg = (f"Generated {len(self.global_state.prompt_buckets)} "
-               f"prompt buckets [bs, seq]: "
-               f"{list(sorted(self.global_state.prompt_buckets))}")
+               f"prompt buckets [bs, seq]: ")
+        msg += "".join([f"{i}\n" for i in buckets_info])
         print(msg)
 
 class HpuModelAdapter:
@@ -401,7 +410,9 @@ class HpuModelAdapter:
         kwargs = kwargs.copy()
         selected_token_indices = kwargs.pop('selected_token_indices')
         if 'warmup_mode' in kwargs:
-            kwargs.pop('warmup_mode')
+            warmup_mode = kwargs.pop('warmup_mode')
+        else:
+            warmup_mode = False
         input_ids = kwargs['input_ids']
         kwargs['attn_metadata'] = self._update_metadata(
             kwargs['attn_metadata'], input_ids.size(0), input_ids.size(1),
@@ -412,12 +423,11 @@ class HpuModelAdapter:
         if kwargs['attn_metadata'].is_prompt and kwargs['attn_metadata'].enable_merged_prefill:
             am = kwargs['attn_metadata']
             print("Warming up HPU Graph - input_ids: ", input_ids.shape,
-                  "attn_bias: ", am.attn_bias.shape if am.attn_bias is not None else None,
                   "enable_merged_prefill:", am.enable_merged_prefill,
-                  'seq_lens_tensor:', am.seq_lens_tensor if am.seq_lens_tensor is not None else None,
+                  "attn_bias: ", am.attn_bias.shape if am.attn_bias is not None else None,
                   "seq_indices:", am.seq_indices.shape if am.seq_indices is not None else None,
-                  "batch_indices:", am.batch_indices.shape if am.batch_indices is not None else None,
-                  "batch_offsets:", am.batch_offsets.shape if am.batch_offsets is not None else None,)
+                  "slot_mapping:", am.slot_mapping.shape if am.slot_mapping is not None else None,
+            )
         hidden_states = self.model(*args, **kwargs)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         hidden_states = hidden_states.index_select(0, selected_token_indices)
@@ -820,6 +830,15 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         if self.skip_warmup:
             return True
         return (batch_size, seq_len, is_prompt) in self.graphed_buckets
+    
+    def _use_graphs_merged(self, batch_size, seq_len, merged_seq_len, is_prompt):
+        if self.enforce_eager:
+            return False
+        if self.skip_warmup:
+            return True
+        ret = (batch_size, seq_len, merged_seq_len, is_prompt) in self.graphed_buckets
+        #print(f"HPUMergedPrefill - _use_graphs_merged: {ret} - {batch_size}, {seq_len}, {merged_seq_len}, {is_prompt}")
+        return ret
 
     def _is_valid_bucket(self, bucket):
         return bucket[0] * bucket[1] <= self.max_num_batched_tokens
@@ -1458,6 +1477,9 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             return attn_metadata.slot_mapping.size(1)
         else:
             return attn_metadata.block_list.numel()
+    
+    def _merged_seq_len(self, attn_metadata):
+        return attn_metadata.seq_indices.size(0)
 
     def trim_attn_metadata(self, metadata: AttentionMetadata) -> object:
         # NOTE(kzawora): To anyone working on this in the future:
@@ -1551,7 +1573,14 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                         is_pt_profiler_run=False,
                         is_lora_profile_run=False,
                         temperature=0) -> None:
-        use_graphs = self._use_graphs(batch_size, seq_len, is_prompt)
+        if self.enable_merged_prefill and is_prompt:
+            seq_len_padded = max(self.bucketing_ctx.get_padded_prompt_seq_len(seq_len), self.block_size)
+            merged_seq_len = seq_len * batch_size
+            bucket = (batch_size, seq_len_padded, merged_seq_len, is_prompt)
+            #print("Call warmup_scenario - ", bucket)
+            use_graphs = self._use_graphs_merged(*bucket)
+        else:
+            use_graphs = self._use_graphs(batch_size, seq_len, is_prompt)
         scenario_name = ("warmup_"
                          f"{'prompt' if is_prompt else 'decode'}_"
                          f"bs{batch_size}_"
@@ -1721,7 +1750,13 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             if mem_estimate >= available_mem:
                 captured_all = False
                 continue
-            graphed_bucket = (batch_size, seq_len, is_prompt)
+            if self.enable_merged_prefill and is_prompt:
+                merged_seq_len = batch_size * seq_len
+                seq_len_padded = max(self.bucketing_ctx.get_padded_prompt_seq_len(seq_len), self.block_size)
+                print("Add to graph_buckets - ", (batch_size, seq_len_padded, merged_seq_len, is_prompt))
+                graphed_bucket = (batch_size, seq_len_padded, merged_seq_len, is_prompt)
+            else:
+                graphed_bucket = (batch_size, seq_len, is_prompt)
             if graphed_bucket in self.graphed_buckets:
                 continue
             self.graphed_buckets.add(graphed_bucket)
@@ -2188,7 +2223,11 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
             assert is_prompt is not None
             batch_size = input_tokens.size(0)
             seq_len = self._seq_len(attn_metadata)
-            use_graphs = self._use_graphs(batch_size, seq_len, is_prompt)
+            if attn_metadata.enable_merged_prefill:
+                merged_seq_len = self._merged_seq_len(attn_metadata)
+                use_graphs = self._use_graphs_merged(batch_size, seq_len, merged_seq_len, is_prompt)
+            else:
+                use_graphs = self._use_graphs(batch_size, seq_len, is_prompt)
             self._check_config(batch_size, seq_len, is_prompt, warmup_mode)
 
             lora_mask: torch.Tensor = None

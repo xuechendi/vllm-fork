@@ -174,6 +174,7 @@ def run_vllm(
             start = time.perf_counter()
             llm.generate(prompts, sampling_params, use_tqdm=False)
             end = time.perf_counter()
+            print("!!!!!!!!Run: ", end - start, " seconds")
     else:
         prompts = [request.prompt for request in requests]
         # output_len should be the same for all requests.

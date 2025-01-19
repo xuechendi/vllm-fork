@@ -84,9 +84,9 @@ class HPUAttentionMetadata(HPUPagedAttentionMetadata, AttentionMetadata):
     context_lens_tensor: Optional[torch.Tensor]
     enable_merged_prefill: bool = False
     seq_lens: Optional[List[int]] = None
-    seq_indices: Optional[List[int]] = None
-    batch_indices: Optional[List[int]] = None
-    batch_offsets: Optional[List[int]] = None
+    seq_indices: Optional[torch.Tensor] = None
+    batch_indices: Optional[torch.Tensor] = None
+    batch_offsets: Optional[torch.Tensor] = None
     encoder_seq_lens: Optional[List[int]] = None
     encoder_seq_lens_tensor: Optional[torch.Tensor] = None
     cross_block_indices: Optional[torch.Tensor] = None
