@@ -221,23 +221,21 @@ class HPUBucketingContextWithMergedPrefill(HPUBucketingContext):
 
         # for selected bucket, we need to repeat for batch_size time
         self.global_state.prompt_buckets = []
-        buckets_info = []
         for bucket in prompt_buckets:
             bs, seq = bucket
             if bs * seq < self.max_num_batched_tokens:
-                if (bs + 1) * seq < self.max_num_batched_tokens:
+                if bs !=1 and (bs + 1) * seq < self.max_num_batched_tokens:
                     continue
             start_msl = (seq - self.block_size) * bs if bs > 1 else seq
             start_msl = start_msl if start_msl > 0 else self.block_size
             end_msl = seq * bs + 1
-            buckets = [(bs, msl // bs) for msl in range(start_msl, end_msl, self.block_size)]
+            buckets = [(bs, seq, msl) for msl in range(start_msl, end_msl, self.block_size)]
             self.global_state.prompt_buckets.extend(buckets)
-            buckets_info.append({"batch_mode":(bs, seq), "merged_mode":list(range(start_msl, end_msl, self.block_size)), "calculated_buckets": buckets})
-        self.global_state.prompt_buckets = list(set(self.global_state.prompt_buckets))
+        self.global_state.prompt_buckets = list(sorted(set(self.global_state.prompt_buckets)))
 
         msg = (f"Generated {len(self.global_state.prompt_buckets)} "
-               f"prompt buckets [bs, seq]: ")
-        msg += "".join([f"{i}\n" for i in buckets_info])
+               f"prompt buckets [bs, seq, merged_seq_len]: \n")
+        msg += "".join([f"{i}\n" for i in self.global_state.prompt_buckets])
         print(msg)
 
 class HpuModelAdapter:
@@ -1572,12 +1570,10 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                         kv_caches,
                         is_pt_profiler_run=False,
                         is_lora_profile_run=False,
-                        temperature=0) -> None:
-        if self.enable_merged_prefill and is_prompt:
-            seq_len_padded = max(self.bucketing_ctx.get_padded_prompt_seq_len(seq_len), self.block_size)
-            merged_seq_len = seq_len * batch_size
-            bucket = (batch_size, seq_len_padded, merged_seq_len, is_prompt)
-            #print("Call warmup_scenario - ", bucket)
+                        temperature=0,
+                        merged_seq_len=None) -> None:
+        if merged_seq_len is not None:
+            bucket = (batch_size, seq_len, merged_seq_len, is_prompt)
             use_graphs = self._use_graphs_merged(*bucket)
         else:
             use_graphs = self._use_graphs(batch_size, seq_len, is_prompt)
@@ -1612,14 +1608,21 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self.profiler.start('internal', scenario_name)
         times = 3 if use_graphs or is_pt_profiler_run else 1
         if is_prompt:
+            seq_lens = [seq_len] * batch_size
+            if merged_seq_len is not None and sum(seq_lens) != merged_seq_len:
+                seq_lens[0] -= len(seq_lens)
+                if len(seq_lens) > 2:
+                    middle_len = len(seq_lens) - 2
+                    seq_lens[1:-1] = [(merged_seq_len - seq_lens[0]) // (middle_len + 1)] * middle_len
+                seq_lens[-1] = merged_seq_len - sum(seq_lens[:-1])
             seqs = [
                 self.create_dummy_seq_group_metadata(
                     i,
-                    seq_len,
+                    seq_len_,
                     is_prompt,
                     lora_request=dummy_lora_requests_per_seq[i]
                     if dummy_lora_requests_per_seq else None,
-                    temperature=temperature) for i in range(batch_size)
+                    temperature=temperature) for i, seq_len_ in enumerate(seq_lens)
             ]
         else:
             # FIXME: seq_len is actually number of blocks
@@ -1701,7 +1704,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             raise RuntimeError("LoRA is not enabled.")
         return self.lora_manager.list_adapters()
 
-    def log_warmup(self, phase, i, max_i, batch_size, seq_len):
+    def log_warmup(self, phase, i, max_i, batch_size, seq_len, merged_seq_len=None):
         free_mem = format_bytes(
             HabanaMemoryProfiler.current_free_device_memory())
         dim = "num_blocks"
@@ -1710,10 +1713,17 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         msg = (f"[Warmup][{phase}][{i+1}/{max_i}] "
                f"batch_size:{batch_size} "
                f"{dim}:{seq_len} "
+               f"merged_seq_len:{merged_seq_len} "
                f"free_mem:{free_mem}")
         logger.info(msg)
 
     def warmup_all_buckets(self, buckets, is_prompt, kv_caches):
+        if self.enable_merged_prefill and is_prompt:
+            for i, (batch_size, seq_len, merged_seq_len) in enumerate(reversed(buckets)):
+                self.log_warmup('Prompt' if is_prompt else 'Decode', i,
+                                len(buckets), batch_size, seq_len, merged_seq_len)
+                self.warmup_scenario(batch_size, seq_len, is_prompt, kv_caches, merged_seq_len=merged_seq_len)
+            return
         for i, (batch_size, seq_len) in enumerate(reversed(buckets)):
             self.log_warmup('Prompt' if is_prompt else 'Decode', i,
                             len(buckets), batch_size, seq_len)
@@ -1743,6 +1753,9 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         buckets = list(sorted(buckets, key=ordering))
         captured_all = True
         warmed_random_sampler_bs: Set[int] = set()
+        buckets_merged = buckets
+        if self.enable_merged_prefill and is_prompt:
+            buckets = [(bs, sl) for bs, sl, msl in buckets]
         for idx, (batch_size, seq_len) in enumerate(buckets):
             # Graph memory usage is proportional to seq dimension in a batch
             batch_seq = batch_size * seq_len if is_prompt else batch_size
@@ -1751,23 +1764,23 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                 captured_all = False
                 continue
             if self.enable_merged_prefill and is_prompt:
-                merged_seq_len = batch_size * seq_len
-                seq_len_padded = max(self.bucketing_ctx.get_padded_prompt_seq_len(seq_len), self.block_size)
-                print("Add to graph_buckets - ", (batch_size, seq_len_padded, merged_seq_len, is_prompt))
-                graphed_bucket = (batch_size, seq_len_padded, merged_seq_len, is_prompt)
+                merged_seq_len = buckets_merged[idx][2]
+                graphed_bucket = (batch_size, seq_len, merged_seq_len, is_prompt)
             else:
+                merged_seq_len = None
                 graphed_bucket = (batch_size, seq_len, is_prompt)
             if graphed_bucket in self.graphed_buckets:
                 continue
             self.graphed_buckets.add(graphed_bucket)
-            self.log_warmup(phase, idx, num_candidates, batch_size, seq_len)
+            self.log_warmup(phase, idx, num_candidates, batch_size, seq_len, merged_seq_len)
             with HabanaMemoryProfiler() as mem_prof:
                 self.warmup_scenario(batch_size,
                                      seq_len,
                                      is_prompt,
                                      kv_caches,
                                      temperature=1.0 if batch_size
-                                     not in warmed_random_sampler_bs else 0)
+                                     not in warmed_random_sampler_bs else 0,
+                                     merged_seq_len=merged_seq_len)
             warmed_random_sampler_bs.add(batch_size)
             used_mem = align_workers(mem_prof.consumed_device_memory,
                                      torch.distributed.ReduceOp.MAX)
