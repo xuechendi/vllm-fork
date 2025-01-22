@@ -353,8 +353,15 @@ class HpuModelAdapter:
             mask, -math.inf))
 
         if not is_fake_hpu():
-            block_mapping = torch.nn.functional.one_hot(metadata.block_groups,
-                                                        num_classes=batch_size)
+            # block_mapping = torch.nn.functional.one_hot(metadata.block_groups,
+            #                                             num_classes=batch_size)
+            block_groups = metadata.block_groups.to(torch.long)
+            oob_values = block_groups.lt(0)
+            block_groups.masked_fill_(oob_values, 0)
+            block_mapping = torch.nn.functional.one_hot(block_groups,
+                                                         num_classes=batch_size)
+            block_mapping.masked_fill_(oob_values.unsqueeze(-1), 0)
+
         else:
             # Unfortunately one_hot on CPU
             # doesn't handle out of bounds classes so we need to convert
