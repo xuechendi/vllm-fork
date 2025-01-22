@@ -204,6 +204,14 @@ def get_names_for_rope(model: torch.nn.Module):
         }
 
 class HPUBucketingContextWithMergedPrefill(HPUBucketingContext):
+    def __init__(self, 
+                 max_num_seqs,
+                 max_num_prefill_seqs,
+                 block_size,
+                 max_num_batched_tokens,
+                 buckets_black_list):
+        super().__init__(max_num_seqs, max_num_prefill_seqs, block_size, max_num_batched_tokens)
+        self.buckets_blocked = buckets_black_list
 
     def generate_prompt_buckets(self):
         print(
@@ -223,15 +231,13 @@ class HPUBucketingContextWithMergedPrefill(HPUBucketingContext):
         self.global_state.prompt_buckets = []
         for bucket in prompt_buckets:
             bs, seq = bucket
-            if bs * seq < self.max_num_batched_tokens:
-                if bs !=1 and (bs + 1) * seq < self.max_num_batched_tokens:
-                    continue
             start_msl = (seq - self.block_size) * bs if bs > 1 else seq
             start_msl = start_msl if start_msl > 0 else self.block_size
             end_msl = seq * bs + 1
             buckets = [(bs, seq, msl) for msl in range(start_msl, end_msl, self.block_size)]
             self.global_state.prompt_buckets.extend(buckets)
         self.global_state.prompt_buckets = list(sorted(set(self.global_state.prompt_buckets)))
+        self.global_state.prompt_buckets = [bucket for bucket in self.global_state.prompt_buckets if bucket not in self.buckets_blocked]
 
         msg = (f"Generated {len(self.global_state.prompt_buckets)} "
                f"prompt buckets [bs, seq, merged_seq_len]: \n")
@@ -330,14 +336,14 @@ class HpuModelAdapter:
             mask, -math.inf))
 
         if not is_fake_hpu():
-            # block_mapping = torch.nn.functional.one_hot(metadata.block_groups,
-            #                                             num_classes=batch_size)
-            block_groups = metadata.block_groups.to(torch.long)
-            oob_values = block_groups.lt(0)
-            block_groups.masked_fill_(oob_values, 0)
-            block_mapping = torch.nn.functional.one_hot(block_groups,
-                                                         num_classes=batch_size)
-            block_mapping.masked_fill_(oob_values.unsqueeze(-1), 0)
+            block_mapping = torch.nn.functional.one_hot(metadata.block_groups,
+                                                        num_classes=batch_size)
+            # block_groups = metadata.block_groups.to(torch.long)
+            # oob_values = block_groups.lt(0)
+            # block_groups.masked_fill_(oob_values, 0)
+            # block_mapping = torch.nn.functional.one_hot(block_groups,
+            #                                              num_classes=batch_size)
+            # block_mapping.masked_fill_(oob_values.unsqueeze(-1), 0)
         else:
             # Unfortunately one_hot on CPU
             # doesn't handle out of bounds classes so we need to convert
@@ -674,10 +680,20 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self.enable_merged_prefill = os.environ.get('VLLM_MERGED_PREFILL',
                                                     'false').lower() == 'true'
         if self.enable_merged_prefill:
-            bucketing_ctx = HPUBucketingContextWithMergedPrefill
+            buckets_black_list_file_name = os.environ.get("VLLM_BUCKETS_BLACK_LIST", None)
+            if buckets_black_list_file_name is not None:
+                import re
+                with open(buckets_black_list_file_name, "r") as f:
+                    # extract numbers from a tuple string, ex: (2, 512, 768)
+                    buckets_black_list = [tuple(map(int, re.findall(r'\d+', line))) for line in f]
+                print(f"HPUMergedPrefill - Buckets black list: {buckets_black_list}")
+            self.bucketing_ctx = HPUBucketingContextWithMergedPrefill(self.max_num_seqs,
+                                                 self.max_num_prefill_seqs,
+                                                 self.block_size,
+                                                 self.max_num_batched_tokens,
+                                                 buckets_black_list)
         else:
-            bucketing_ctx = HPUBucketingContext
-        self.bucketing_ctx = bucketing_ctx(self.max_num_seqs,
+            self.bucketing_ctx = HPUBucketingContext(self.max_num_seqs,
                                                  self.max_num_prefill_seqs,
                                                  self.block_size,
                                                  self.max_num_batched_tokens)
