@@ -333,6 +333,7 @@ class LlamaAttention(nn.Module):
         hidden_states: torch.Tensor,
         kv_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
+        idx: int = None,
     ) -> torch.Tensor:
         batch_size = hidden_states.size(0)
         seq_len = hidden_states.size(1)
@@ -348,7 +349,7 @@ class LlamaAttention(nn.Module):
             q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size],
                                 dim=-1)
         q, k = self.rotary_emb(positions, q, k)
-        attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
+        attn_output = self.attn(q, k, v, kv_cache, attn_metadata, idx)
         if ((seq_len*batch_size)//split_size>=2) and do_split:
             attn_output = attn_output.view(1, -1, self.q_size)
             attn_list = torch.split(attn_output, split_size, 1)
@@ -437,11 +438,11 @@ class LlamaDecoderLayer(nn.Module):
 
     def forward(
         self,
-        positions: torch.Tensor,
-        hidden_states: torch.Tensor,
+        positions: Union[torch.Tensor, List[torch.Tensor]],
+        hidden_states: Union[torch.Tensor, List[torch.Tensor]],
         kv_cache: torch.Tensor,
-        attn_metadata: AttentionMetadata,
-        residual: Optional[torch.Tensor],
+        attn_metadata: Union[AttentionMetadata, List[AttentionMetadata]],
+        residual: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Get prompt bs from attn_metadata. The one from hidden_states may be inaccurate due to slicing
         if attn_metadata.is_prompt:
@@ -526,6 +527,117 @@ class LlamaDecoderLayer(nn.Module):
 
         return hidden_states, residual
 
+class LlamaDecoderLayerWithBatchSplit(nn.Module):
+
+    def __init__(
+        self,
+        config: LlamaConfig,
+        cache_config: Optional[CacheConfig] = None,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        rope_theta = getattr(config, "rope_theta", 10000)
+        rope_scaling = getattr(config, "rope_scaling", None)
+        if rope_scaling is not None and getattr(
+                config, "original_max_position_embeddings", None):
+            rope_scaling["original_max_position_embeddings"] = (
+                config.original_max_position_embeddings)
+        max_position_embeddings = getattr(config, "max_position_embeddings",
+                                          8192)
+        # Support abacusai/Smaug-72B-v0.1 with attention_bias
+        # Support internlm/internlm-7b with bias
+        attention_bias = getattr(config, "attention_bias", False) or getattr(
+            config, "bias", False)
+        bias_o_proj = attention_bias
+        # support internlm/internlm3-8b with qkv_bias
+        if hasattr(config, 'qkv_bias'):
+            attention_bias = config.qkv_bias
+
+        self.self_attn = LlamaAttention(
+            config=config,
+            hidden_size=self.hidden_size,
+            num_heads=config.num_attention_heads,
+            num_kv_heads=getattr(config, "num_key_value_heads",
+                                 config.num_attention_heads),
+            rope_theta=rope_theta,
+            rope_scaling=rope_scaling,
+            max_position_embeddings=max_position_embeddings,
+            quant_config=quant_config,
+            bias=attention_bias,
+            bias_o_proj=bias_o_proj,
+            cache_config=cache_config,
+            prefix=f"{prefix}.self_attn",
+        )
+        self.mlp = LlamaMLP(
+            hidden_size=self.hidden_size,
+            intermediate_size=config.intermediate_size,
+            hidden_act=config.hidden_act,
+            quant_config=quant_config,
+            bias=getattr(config, "mlp_bias", False),
+            prefix=f"{prefix}.mlp",
+            split_gate_up=cache_config.split_gate_up
+        )
+        self.input_layernorm = RMSNorm(config.hidden_size,
+                                       eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size,
+                                                eps=config.rms_norm_eps)
+
+    def forward(
+        self,
+        positions: List[torch.Tensor],
+        hidden_states: List[torch.Tensor],
+        kv_cache: torch.Tensor,
+        attn_metadata: List[AttentionMetadata],
+        residual: Optional[List[torch.Tensor]] = None,
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+        enable_tp_overlap_per_batch = isinstance(attn_metadata, list) and attn_metadata[0].enable_TP_overlap_per_batch
+        if enable_tp_overlap_per_batch:
+            # Self Attention
+            if residual is None:
+                residual = hidden_states
+                hidden_states = [self.input_layernorm(hidden_states_ind) for hidden_states_ind in hidden_states]
+            else:
+                tuple_out = [[], []]
+                for hidden_states_ind, residual_ind in zip(hidden_states, residual):
+                    hidden_states_ind, residual_ind = self.input_layernorm(hidden_states_ind, residual_ind)
+                    tuple_out[0].append(hidden_states_ind)
+                    tuple_out[1].append(residual_ind)
+                hidden_states, residual = tuple_out[0], tuple_out[1]
+            for i in range(len(hidden_states)):
+                hidden_states[i] = self.self_attn(positions=positions[i],
+                                                hidden_states=hidden_states[i],
+                                                kv_cache=kv_cache,
+                                                attn_metadata=attn_metadata[i],
+                                                idx=i)
+
+            # Fully Connected
+            for i in range(len(hidden_states)):
+                hidden_states[i], residual[i] = self.post_attention_layernorm(
+                    hidden_states[i], residual[i])
+                hidden_states[i] = self.mlp(hidden_states[i])
+
+            return hidden_states, residual
+        else:
+            # Self Attention
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(
+                    hidden_states, residual)
+            hidden_states = self.self_attn(positions=positions,
+                                           hidden_states=hidden_states,
+                                           kv_cache=kv_cache,
+                                           attn_metadata=attn_metadata)
+
+            # Fully Connected
+            hidden_states, residual = self.post_attention_layernorm(
+                hidden_states, residual)
+            hidden_states = self.mlp(hidden_states)
+            return hidden_states, residual
+
 @support_torch_compile
 class LlamaModel(nn.Module):
 
@@ -584,18 +696,23 @@ class LlamaModel(nn.Module):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor],
-        positions: torch.Tensor,
+        input_ids: Union[torch.Tensor, List[torch.Tensor]],
+        positions: Union[torch.Tensor, List[torch.Tensor]],
         kv_caches: List[torch.Tensor],
-        attn_metadata: AttentionMetadata,
+        attn_metadata: Union[AttentionMetadata, List[AttentionMetadata]],
         intermediate_tensors: Optional[IntermediateTensors],
         inputs_embeds: Optional[torch.Tensor] = None,
-    ) -> Union[torch.Tensor, IntermediateTensors]:
+    ) -> Union[torch.Tensor, IntermediateTensors, List[torch.Tensor]]:
+        enable_tp_overlap_per_batch = isinstance(attn_metadata, list) and attn_metadata[0].enable_TP_overlap_per_batch
         if get_pp_group().is_first_rank:
             if inputs_embeds is not None:
                 hidden_states = inputs_embeds
             else:
-                hidden_states = self.get_input_embeddings(input_ids)
+                if enable_tp_overlap_per_batch:
+                    hidden_states = [self.get_input_embeddings(ids)
+                                     for ids in input_ids]
+                else:
+                    hidden_states = self.get_input_embeddings(input_ids)
             residual = None
         else:
             assert intermediate_tensors is not None
@@ -610,6 +727,13 @@ class LlamaModel(nn.Module):
             hidden_states, residual = layer(positions, hidden_states,
                                             kv_caches[i - self.start_layer],
                                             attn_metadata, residual)
+        if enable_tp_overlap_per_batch:
+            hidden_states_out = []
+            for hidden_states_ind, residual_ind in zip(hidden_states, residual):
+                hidden_states_ind, residual_ind = self.norm(hidden_states_ind, residual_ind)
+                hidden_states_out.append(hidden_states_ind)
+            return hidden_states
+
         if type(hidden_states)==list:
             hidden_states = torch.cat(hidden_states, dim=1)
             residual = torch.cat(residual, dim=1)
@@ -802,20 +926,22 @@ class LlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
             self.model.make_empty_intermediate_tensors)
 
     def _init_model(self, vllm_config: VllmConfig, prefix: str = ""):
-        return LlamaModel(vllm_config=vllm_config, prefix=prefix)
+        enable_TP_overlap_per_batch = os.environ.get('VLLM_TP_OVERLAP_PER_BATCH', 'false') in ['true', '1']
+        layer_type = LlamaDecoderLayerWithBatchSplit if enable_TP_overlap_per_batch else LlamaDecoderLayer
+        return LlamaModel(vllm_config=vllm_config, prefix=prefix, layer_type=layer_type)
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.get_input_embeddings(input_ids)
 
     def forward(
         self,
-        input_ids: torch.Tensor,
-        positions: torch.Tensor,
+        input_ids: Union[torch.Tensor, List[torch.Tensor]],
+        positions: Union[torch.Tensor, List[torch.Tensor]],
         kv_caches: List[torch.Tensor],
-        attn_metadata: AttentionMetadata,
+        attn_metadata: Union[AttentionMetadata, List[AttentionMetadata]],
         intermediate_tensors: Optional[IntermediateTensors] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
-    ) -> Union[torch.Tensor, IntermediateTensors]:
+    ) -> Union[torch.Tensor, IntermediateTensors, List[torch.Tensor]]:
         model_output = self.model(input_ids, positions, kv_caches,
                                   attn_metadata, intermediate_tensors,
                                   inputs_embeds)

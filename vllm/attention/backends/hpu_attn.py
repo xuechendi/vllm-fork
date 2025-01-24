@@ -205,6 +205,8 @@ class HPUAttentionMetadata(HPUPagedAttentionMetadata, AttentionMetadata):
     seq_lens_tensor: Optional[torch.Tensor]
     context_lens_tensor: Optional[torch.Tensor]
     enable_merged_prefill: bool = False
+    enable_TP_overlap_per_batch: bool = False
+    tp_overlap_per_batch_num_splits: int = 2
     actual_num_prefills: Optional[torch.Tensor] = None
     repeated_idx_tensor: Optional[torch.Tensor] = None
     seq_lens: Optional[List[int]] = None

@@ -451,15 +451,55 @@ class HpuModelAdapter:
             raise AttributeError(
                 "The module at the end of the path does not have \
                 a 'prepare_cos_sin' method.")
+    def split_input(self, num_splits, args, kwargs):
+        # goal is to split data listed as below into a list
+        # data are: input_ids, positions, attn_metadata, selected_token_indices
+        # data in attn_metadata are: block_indices, block_offsets, block_mapping, seq_lens_tensor, attn_bias
+        def split_tensor(tensor: torch.Tensor,
+                         num_partitions: int,
+                         dim: int = 0):
+            dim_size = tensor.size()[dim] // num_partitions
+            tensor_list = torch.split(tensor, dim_size, dim=dim)
+            return tensor_list
+
+        kwargs['input_ids'] = split_tensor(kwargs['input_ids'], num_splits)
+        kwargs['positions'] = split_tensor(kwargs['positions'], num_splits)
+        block_indices = split_tensor(kwargs['attn_metadata'].block_indices, num_splits)
+        print("block_indices before is ", kwargs['attn_metadata'].block_indices, "after is ", block_indices)
+        block_offsets = split_tensor(kwargs['attn_metadata'].block_offsets, num_splits) \
+            if kwargs['attn_metadata'].block_offsets is not None else [None] * num_splits
+        seq_lens_tensor = split_tensor(kwargs['attn_metadata'].seq_lens_tensor, num_splits)
+        attn_bias = split_tensor(kwargs['attn_metadata'].attn_bias, num_splits) \
+            if kwargs['attn_metadata'].attn_bias is not None else [None] * num_splits
+        attn_metadata_list =[]
+        for i in range(num_splits):
+            attn_metadata = copy.deepcopy(kwargs['attn_metadata'])
+            attn_metadata = attn_metadata._replace(block_indices=block_indices[i],
+                                                             block_offsets=block_offsets[i],
+                                                             seq_lens_tensor=seq_lens_tensor[i],
+                                                             attn_bias=attn_bias[i])
+            attn_metadata_list.append(attn_metadata)
+        kwargs['attn_metadata'] = attn_metadata_list
+        return args, kwargs
 
     def forward(self, *args, **kwargs):
+        num_splits = kwargs['attn_metadata'].tp_overlap_per_batch_num_splits
+        enable_TP_overlap_per_batch = kwargs['attn_metadata'].enable_TP_overlap_per_batch
+
+        if enable_TP_overlap_per_batch:
+            self.recompute_cos_sin = True
+        args, kwargs = self.forward_pre_(*args, **kwargs)
+
+        if enable_TP_overlap_per_batch:
+            args, kwargs = self.split_input(num_splits, args, kwargs)
+            return self.forward_list(*args, **kwargs)
+
+        return self.forward_tensor(*args, **kwargs)
+
+    def forward_pre_(self, *args, **kwargs):
         kwargs = kwargs.copy()
-        selected_token_indices = kwargs.pop('selected_token_indices')
         if 'warmup_mode' in kwargs:
             kwargs.pop('warmup_mode')
-        virtual_engine = 0
-        if 'virtual_engine' in kwargs:
-            virtual_engine = kwargs.pop('virtual_engine')
         input_ids = kwargs['input_ids']
         kwargs['attn_metadata'] = self._update_metadata(
             kwargs['attn_metadata'], input_ids.size(0), input_ids.size(1),
@@ -467,21 +507,32 @@ class HpuModelAdapter:
         LoraMask.setLoraMask(kwargs.pop('lora_mask'))
         if self.layer_names is not None:
             self._prepare_cos_sin(kwargs['positions'])
-        if kwargs['attn_metadata'].is_prompt:
-            am = kwargs['attn_metadata']
-            print("Warming up HPU Graph - input_ids: ", input_ids.shape,
-                  "seq_lens_tensor: ", am.seq_lens_tensor.shape,
-                  "context_lens_tensor: ", am.context_lens_tensor.shape,
-                  "attn_bias: ", am.attn_bias.shape if am.attn_bias is not None else None,
-                  "enable_merged_prefill:", am.enable_merged_prefill,
-                  "slot_mapping: ", am.slot_mapping.shape,
-                  "selected_token_indices: ", selected_token_indices.shape)
+        return args, kwargs
+
+    def forward_tensor(self, *args, **kwargs):
+        selected_token_indices = kwargs.pop('selected_token_indices')
+        virtual_engine = 0
+        if 'virtual_engine' in kwargs:
+            virtual_engine = kwargs.pop('virtual_engine')
         with set_forward_context(kwargs['attn_metadata'], self.vllm_config,
                                  virtual_engine):
             hidden_states = self.model(*args, **kwargs)
             hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
             hidden_states = hidden_states.index_select(0,
                                                        selected_token_indices)
+        return hidden_states
+
+    def forward_list(self, *args, **kwargs):
+        selected_token_indices = kwargs.pop('selected_token_indices')
+        virtual_engine = 0
+        if 'virtual_engine' in kwargs:
+            virtual_engine = kwargs.pop('virtual_engine')
+        with set_forward_context(kwargs['attn_metadata'], self.vllm_config,
+                                 virtual_engine):
+            hidden_states_list = self.model(*args, **kwargs)
+            hidden_states = torch.cat(hidden_states_list, dim=0)
+            hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+            hidden_states = hidden_states.index_select(0, selected_token_indices)
         return hidden_states
 
     def compute_logits(self, *args, **kwargs):
@@ -727,6 +778,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         self.seen_configs: set = set()
         self._mem_margin: Optional[int] = None
         self.enable_merged_prefill = os.environ.get('VLLM_MERGED_PREFILL',
+                                                    'false').lower() == 'true'
+        self.enable_TP_overlap_per_batch = os.environ.get('VLLM_TP_OVERLAP_PER_BATCH',
                                                     'false').lower() == 'true'
         if self.enable_merged_prefill:
             self.bucketing_ctx = HPUBucketingContextWithMergedPrefill(
@@ -1124,6 +1177,12 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         seq_lens_tensor = seq_lens_tensor.to(self.device, non_blocking=True)
         context_lens_tensor = context_lens_tensor.to(self.device,
                                                      non_blocking=True)
+        num_splits = os.environ.get('VLLM_TP_OVERLAP_NUM_SPLITS', 2)
+        tp_overlap_per_batch_num_splits=int(num_splits)
+        if self.enable_TP_overlap_per_batch:
+            enable_TP_overlap_per_batch = len(seq_lens) % num_splits == 0
+        else:
+            enable_TP_overlap_per_batch = False
 
         attn_metadata = self.attn_backend.make_metadata(
             is_prompt=True,
@@ -1135,6 +1194,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             block_scales=None,
             block_groups=None,
             attn_bias=None,
+            enable_TP_overlap_per_batch=enable_TP_overlap_per_batch,
+            tp_overlap_per_batch_num_splits=tp_overlap_per_batch_num_splits,
             seq_lens=seq_lens,
             seq_lens_tensor=seq_lens_tensor,
             context_lens_tensor=context_lens_tensor,
@@ -1756,6 +1817,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             'enable_merged_prefill',
             'actual_num_prefills',
             'repeated_idx_tensor',
+            'enable_TP_overlap_per_batch',
+            'tp_overlap_per_batch_num_splits',
             'block_list',
             'block_mapping',
             'block_usage',

@@ -134,6 +134,7 @@ class Attention(nn.Module):
         value: torch.Tensor,
         kv_cache: torch.Tensor,
         attn_metadata: AttentionMetadata,
+        idx: int = None,
     ) -> torch.Tensor:
         if self.use_output:
             output = torch.empty_like(query)
@@ -156,6 +157,10 @@ class Attention(nn.Module):
             return output.view(-1, hidden_size)
         else:
             if self.use_direct_call:
+                if idx is not None:
+                    return unified_attention_with_idx(query, key, value,
+                                                       self.layer_name,
+                                                       idx)
                 return unified_attention(query, key, value, self.layer_name)
             else:
                 return torch.ops.vllm.unified_attention(
@@ -244,6 +249,20 @@ def unified_attention(
     self = forward_context.attn_layers[layer_name]
     kv_cache = self.kv_cache[forward_context.virtual_engine]
     return self.impl.forward(query, key, value, kv_cache, attn_metadata,
+                             self._k_scale, self._v_scale)
+
+def unified_attention_with_idx(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    layer_name: str,
+    idx: int,
+) -> torch.Tensor:
+    forward_context: ForwardContext = get_forward_context()
+    attn_metadata = forward_context.attn_metadata
+    self = forward_context.attn_layers[layer_name]
+    kv_cache = self.kv_cache[forward_context.virtual_engine]
+    return self.impl.forward(query, key, value, kv_cache, attn_metadata[idx],
                              self._k_scale, self._v_scale)
 
 
