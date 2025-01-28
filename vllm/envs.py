@@ -571,7 +571,7 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # matrices to match the activation type. This can lead to higher memory and
     # compute usage but better preserves the accuracy of the original model.
     "VLLM_MLA_DISABLE_REQUANTIZATION":
-    lambda: bool(int(os.getenv("VLLM_MLA_DISABLE_REQUANTIZATION", "0"))),
+    lambda: bool(int(os.getenv("VLLM_MLA_DISABLE_REQUANTIZATION", "1"))),
 
     # If set, vLLM will use the Triton implementation of moe_align_block_size,
     # i.e. moe_align_block_size_triton in fused_moe.py.
