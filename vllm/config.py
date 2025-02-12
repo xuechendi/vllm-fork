@@ -972,7 +972,7 @@ class ModelConfig:
     @property
     def use_mla(self) -> bool:
         if self.quantization is not None and self.quantization not in [\
-            "fp8", "compressed-tensors"]:
+            "fp8", "compressed-tensors", "inc"]:
             logger.warning(
                 "MLA is not supported with %s quantization. "
                 "Disabling MLA.", self.quantization)
