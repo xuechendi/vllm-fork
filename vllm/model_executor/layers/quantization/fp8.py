@@ -433,9 +433,9 @@ class Fp8LinearMethod(LinearMethodBase):
                     B_scale_inv=layer.weight_scale_inv,
                     bias=bias,
                     accumulate=False)
-                import habana_frameworks.torch as htorch
-                htorch.core.mark_step()
-                torch.hpu.synchronize()
+                # import habana_frameworks.torch as htorch
+                # htorch.core.mark_step()
+                # torch.hpu.synchronize()
                 return res
             else:
                 pass
