@@ -11,11 +11,11 @@ if [ $((total_len % 128)) -ne 0 ]; then
 fi
 ep_size=8
 moe_n_slice=1
-gpu_utils=0.82
-bs=192
+gpu_utils=0.92
+bs=224
 num_prompts=300
 request_rate=1
-log_name="[0211]static-online-gaudi3-${gpu_utils}util-TPparallel${tp_parrallel}-EP${ep_size}-loop${moe_n_slice}moegroups-multistep${multi_step}_nprompt${num_prompts}_rrate${request_rate}_bs${bs}_i${in_len}_o${out_len}_mdllen${total_len}"
+log_name="[0220-staticquant-g3opt]static-online-gaudi3-${gpu_utils}util-TPparallel${tp_parrallel}-EP${ep_size}-loop${moe_n_slice}moegroups-multistep${multi_step}_nprompt${num_prompts}_rrate${request_rate}_bs${bs}_i${in_len}_o${out_len}_mdllen${total_len}"
 
 VLLM_DECODE_BLOCK_BUCKET_MIN=$((in_len * bs / 128))
 VLLM_DECODE_BLOCK_BUCKET_MAX=$((total_len * bs / 128 + 128))
@@ -23,6 +23,8 @@ VLLM_DECODE_BLOCK_BUCKET_MAX=$((total_len * bs / 128 + 128))
 # tokenizer="/data/models/DeepSeek-R1/"
 model="/data/models/DeepSeek-R1/"
 tokenizer="/data/models/DeepSeek-R1/"
+model="/data/models/DeepSeek-R1-G2-FP8"
+tokenizer="/data/models/DeepSeek-R1-G2-FP8"
 model_name="DeepSeek-R1"
 
 #VLLM_SKIP_WARMUP=true \

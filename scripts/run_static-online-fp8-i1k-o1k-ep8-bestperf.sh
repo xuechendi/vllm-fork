@@ -11,18 +11,18 @@ if [ $((total_len % 128)) -ne 0 ]; then
 fi
 ep_size=8
 moe_n_slice=1
-gpu_utils=0.9
-bs=256
-num_prompts=256
+gpu_utils=0.92
+bs=448
+num_prompts=448
 request_rate=inf
-log_name="[0211]static-online-gaudi3-${gpu_utils}util-TPparallel${tp_parrallel}-EP${ep_size}-loop${moe_n_slice}moegroups-multistep${multi_step}_nprompt${num_prompts}_rrate${request_rate}_bs${bs}_i${in_len}_o${out_len}_mdllen${total_len}"
+log_name="[0224-staticquant-fp8kv-markstep]static-online-gaudi3-${gpu_utils}util-TPparallel${tp_parrallel}-EP${ep_size}-loop${moe_n_slice}moegroups-multistep${multi_step}_nprompt${num_prompts}_rrate${request_rate}_bs${bs}_i${in_len}_o${out_len}_mdllen${total_len}"
 
 VLLM_DECODE_BLOCK_BUCKET_MIN=$((in_len * bs / 128))
 VLLM_DECODE_BLOCK_BUCKET_MAX=$((total_len * bs / 128 + 128))
 # model="/data/models/DeepSeek-R1/"
 # tokenizer="/data/models/DeepSeek-R1/"
-model="/data/models/DeepSeek-R1/"
-tokenizer="/data/models/DeepSeek-R1/"
+model="/data/models/DeepSeek-R1-BF16-w8afp8-static-no-ste-G3"
+tokenizer="/data/models/DeepSeek-R1-BF16-w8afp8-static-no-ste-G3"
 model_name="DeepSeek-R1"
 
 HABANA_VISIBLE_DEVICES="ALL" \
@@ -52,6 +52,7 @@ python -m vllm.entrypoints.openai.api_server \
     --distributed_executor_backend mp \
     --gpu_memory_utilization ${gpu_utils} \
     --kv_cache_dtype "fp8_inc" \
+    --max_num_batched_tokens 4096 \
     --trust_remote_code 2>&1 | tee benchmark_logs/${log_name}_serving.log &
 pid=$(($!-1))
 
