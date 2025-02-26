@@ -134,7 +134,7 @@ class DeepseekV3MoE(nn.Module):
             top_k=config.num_experts_per_tok,
             hidden_size=config.hidden_size,
             intermediate_size=config.moe_intermediate_size,
-            reduce_results=True if self.ep_size > 1 else False,
+            reduce_results=False,
             renormalize=config.norm_topk_prob,
             quant_config=quant_config,
             use_grouped_topk=True,
@@ -154,7 +154,7 @@ class DeepseekV3MoE(nn.Module):
                 intermediate_size=intermediate_size,
                 hidden_act=config.hidden_act,
                 quant_config=quant_config,
-                reduce_results=False if self.ep_size == 1 else True,
+                reduce_results=False,
             )
 
 
@@ -172,7 +172,7 @@ class DeepseekV3MoE(nn.Module):
             router_logits=router_logits) * self.routed_scaling_factor
         if shared_output is not None:
             final_hidden_states = final_hidden_states + shared_output
-        if self.ep_size == 1 and self.tp_size > 1:
+        if self.tp_size > 1:
             final_hidden_states = tensor_model_parallel_all_reduce(
                 final_hidden_states)
 
@@ -656,16 +656,11 @@ class DeepseekV3Model(nn.Module):
             hidden_states = intermediate_tensors["hidden_states"]
             residual = intermediate_tensors["residual"]
 
-        if is_hpu:
-            htorch.core.mark_step()
-
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
             hidden_states, residual = layer(positions, hidden_states,
                                             kv_caches[i - self.start_layer],
                                             attn_metadata, residual)
-            if is_hpu:
-                htorch.core.mark_step()
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors({
