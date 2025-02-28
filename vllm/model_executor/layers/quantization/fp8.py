@@ -468,6 +468,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         self.quant_config = quant_config
         self.block_quant = self.quant_config.weight_block_size is not None
         self.moe_n_slice = int(os.environ.get("VLLM_MOE_N_SLICE", 4))
+        self.enable_dmoe_dynamic_scale = os.environ.get("VLLM_DMOE_DYNAMIC_SCALE", False) in ["1", "true"]
 
     def create_weights(self, layer: Module, num_experts: int, hidden_size: int,
                        intermediate_size_per_partition: int,
@@ -608,8 +609,6 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         else:
             layer.w13_input_scale = None
             layer.w2_input_scale = None
-
-#        print("fp8.py ??????????????????  MoE weight scale init here!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! " + "  w13_weight_scale_inv shape: " + str(layer.w13_weight_scale_inv.shape) + "  w2_weight_scale_inv shape: " + str(layer.w2_weight_scale_inv.shape))
 
     def process_weights_after_loading(self, layer: Module) -> None:
         # Block quant doesn't need to process weights after loading
@@ -909,15 +908,39 @@ class Fp8MoEMethod(FusedMoEMethodBase):
             )
             return final_hidden_states.view(-1, x.shape[1])
 
-        if self.block_quant:
-            orig_M_w13 = layer.orig_M_w13.data
-            orig_N_w13 = layer.orig_N_w13.data
-            orig_M_w2 = layer.orig_M_w2.data
-            orig_N_w2 = layer.orig_N_w2.data
+        if self.quant_config.activation_scheme == "dynamic" and self.enable_dmoe_dynamic_scale:
 
+            x_fp8, x_scale = dynamic_quant(x, single_scale=True)
+
+            #option 1
+            w13_weight = [layer.w13_weight.data[i,...] for i in range(num_experts)]
+            w2_weight = [layer.w2_weight.data[i,...] for i in range(num_experts)]
+            w13_weight_scale = [layer.w13_weight_scale_inv.data[i,...] for i in range(num_experts)]
+            w2_weight_scale = [layer.w2_weight_scale_inv.data[i,...] for i in range(num_experts)]
+            router_weights = topk_weights.to(x.dtype)
+
+            final_hidden_states = torch.ops.hpu.mixture_of_experts(
+                hidden_states=x_fp8,
+                expert_routing_table=(
+                    topk_ids.to(torch.int64)
+                ),
+                router_weights=router_weights,
+                w12=w13_weight,
+                w3=w2_weight,
+                d_scale_hidden_states=x_scale,
+                d_scale_w12=w13_weight_scale,
+                d_scale_w3=w2_weight_scale,
+                permuted_weights=True,
+                activation="silu",
+                experts_min=0 + ep_shift,
+                experts_max=(num_experts - 1) +  ep_shift,
+            )
+
+            return final_hidden_states.view(-1, x.shape[1])
+
+        # if not enable_dmoe_dynamic_scale then use static moe
         if self.quant_config.activation_scheme == "dynamic" and not self.block_quant:
             x_fp8, x_scale = dynamic_quant(x)
-
         padded_weights = torch.zeros((bt, total_num_experts), dtype=x.dtype, device=x.device)
         padded_weights.scatter_(-1, topk_ids, topk_weights)
         padded_weights = padded_weights.transpose(0, 1)
