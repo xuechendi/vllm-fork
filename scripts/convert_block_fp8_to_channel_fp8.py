@@ -8,14 +8,15 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 from tqdm import tqdm
 import logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # CONSTANTS
 SAFETENSORS = "safetensors"
 WEIGHT_SCALE_NAME = "weight_scale_inv"
 MODEL_STATE_DICT_MAPPING_FILENAME = "model.safetensors.index.json"
-FULL_RANGE = 240.0  # torch.finfo(torch.float8_e4m3fnuz).max for Gaudi2
+FULL_RANGE = 448.0  # torch.finfo(torch.float8_e4m3fnuz).max for Gaudi3
+#FULL_RANGE = 240.0  # torch.finfo(torch.float8_e4m3fnuz).max for Gaudi2
 # end constants
 
 def get_input_scales(pkl_path):
@@ -94,14 +95,17 @@ def dequant_block_fp8_weight_naive(weight, weight_scale, block_size, dtype, orig
     dequant_weight = unpad_weight(dequant_weight, original_M, original_N, keep_first_dim=keep_first_dim)
     return dequant_weight
 
+def calc_maxabs_scale(xmaxabs, backoff=1):
+    scale = xmaxabs / (FULL_RANGE * backoff)
+    return scale
 
 def dynamic_quant(data):
-    scale = (torch.abs(data)).max(dim=1).values / FULL_RANGE
+    maxabs = (torch.abs(data)).max(dim=1).values
+    scale = calc_maxabs_scale(maxabs, backoff=1.0)
     scale = scale.unsqueeze(-1)
     data = data / scale
     data_fp8 = data.to(torch.float8_e4m3fn)
     return data_fp8, scale.float()
-
 
 def main(model_path: str, qmodel_path: str, input_scales_path: str) -> None:
     torch.set_grad_enabled(False)
@@ -138,10 +142,7 @@ def main(model_path: str, qmodel_path: str, input_scales_path: str) -> None:
         with safe_open(file_path, framework="pt", device="cpu") as f:
             for name in f.keys():
                 logger.debug(f"[{i+1}/{len(all_weight_filename)}] Processing {name}")
-                if "model.layers.61" in name:
-                    logger.debug(f"Ignoring {name}")
-                    continue
-                elif "proj" in name and "scale_inv" in name:
+                if "proj" in name and "scale_inv" in name:
                     weight_scale_name = name
                     weight_name = name[: -len("_scale_inv")]
                     logger.debug(f"Begin quantizing weight: {weight_name} with scale: {weight_scale_name}")
@@ -167,7 +168,7 @@ def main(model_path: str, qmodel_path: str, input_scales_path: str) -> None:
                     input_scale_name = weight_scale_name.replace("weight_scale_inv", "input_scale_inv")
                     if input_scale_name in input_scales.keys():
                         input_scale = input_scales.pop(input_scale_name)
-                        input_scale = input_scale * 448.0 / FULL_RANGE
+                        input_scale = calc_maxabs_scale(input_scale * 448.0, backoff=1.0)
                         input_scale_name = input_scale_name.replace("input_scale_inv", "input_scale")
                         qtensors[input_scale_name] = input_scale
                         qtensor_mapping[input_scale_name] = filename
