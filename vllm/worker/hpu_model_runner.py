@@ -114,7 +114,7 @@ def setup_profiler():
         torch.profiler.ProfilerActivity.HPU
     ]
     profiler = torch.profiler.profile(
-        schedule=schedule,
+        #schedule=schedule,
         activities=activities,
         on_trace_ready=torch.profiler.tensorboard_trace_handler('.',
                                                                 use_gzip=True),
@@ -1821,6 +1821,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
     def warmup_model(self, kv_caches: List[torch.Tensor]) -> None:
         if profile := os.environ.get('VLLM_PT_PROFILE', None):
             phase, bs, seq_len, graph = profile.split('_')
+            print(f"Profiling {phase} with bs={bs}, seq_len={seq_len}, ")
             is_prompt = phase == 'prompt'
             graphs = graph == 't'
             if graphs:
@@ -2304,6 +2305,14 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                     'real_batch_size': real_batch_size
                 }
 
+                profiler = None
+                #if input_tokens.shape[-1] == 1 and input_positions.shape[-1] in [1024, 2048]:
+                # 4000
+                # 
+                if not warmup_mode and input_tokens.shape[-1] == 1 and attn_metadata.block_groups.shape[-1] >=2944  and self.is_driver_worker:
+                    print(f"record {attn_metadata.block_groups.shape}")
+                    profiler = setup_profiler()
+                    profiler.start()
                 with self.profiler.record_event('internal',
                                                 model_event_name,
                                                 args=profiler_args):
@@ -2352,6 +2361,10 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                         self.cached_step_outputs.append(
                             output.detach().clone())
                 htorch.core.mark_step()
+                if profiler:
+                    profiler.step()
+                    profiler.stop()
+                    raise ValueError("Profile completed")
                 if i < num_steps - 1:
                     if i == 0:
                         if model_input.async_callback is not None:
