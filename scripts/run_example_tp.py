@@ -10,7 +10,11 @@ import datasets
 file_path = os.path.abspath(__file__)
 dataset_path = os.path.join(os.path.dirname(file_path), "../benchmarks")
 
-model_path = "/data/models/DeepSeek-R1/"
+#model_path = "/lkk/DeepSeek-R1-bf16"
+#model_path = "meta-llama/Llama-3.1-8B-Instruct"
+model_path = "/lkk/DeepSeek-R1-G3-static/"
+#model_path = "/lkk/DeepSeek-R1-fp8-static-w8a8-inc"
+
 # model_path = "deepseek-ai/DeepSeek-V2-Lite"
 
 # Parse the command-line arguments.
@@ -33,7 +37,8 @@ os.environ["VLLM_MOE_N_SLICE"] = "1" if args.ep_size > 1 else "4"
 os.environ["VLLM_EP_SIZE"] = f"{args.ep_size}"
 os.environ["VLLM_MLA_DISABLE_REQUANTIZATION"] = "1"
 os.environ["PT_HPU_WEIGHT_SHARING"] = "0"
-
+#os.environ["VLLM_MLA_DISABLE"] = "1"
+#os.environ["VLLM_USE_STATIC_MOE"] = "1"
 def sample_sonnet_requests(
     dataset_path: str,
     num_requests: int,
@@ -170,19 +175,22 @@ if __name__ == "__main__":
     if args.tp_size == 1:
         llm = LLM(
             model=model, 
+            quantization="inc",
+            weights_load_device="cpu",
             tokenizer=args.tokenizer,
             trust_remote_code=True,
             dtype="bfloat16",
-            max_model_len=16384,
+            max_model_len=1024,
+            gpu_memory_utilization=0.8,
         )
     else:
         llm = LLM(
-            model=model, 
+            model=model,
             tokenizer=args.tokenizer,
             tensor_parallel_size=args.tp_size,
             distributed_executor_backend='mp',
             trust_remote_code=True,
-            max_model_len=16384,
+            max_model_len=1024,
             dtype="bfloat16",
         )
 
@@ -200,3 +208,4 @@ if __name__ == "__main__":
         print(f"Generated text: {generated_text!r}")
         print(f"Ground truth: {gt_i!r}")
         print("====================================")
+    del llm
