@@ -19,6 +19,8 @@ from vllm.logger import init_logger
 from vllm.triton_utils.importing import HAS_TRITON
 from vllm.utils import _check_multiproc_method, get_mp_context, run_method
 
+from vllm.platforms import current_platform
+
 if HAS_TRITON:
     from vllm.triton_utils import maybe_set_triton_cache_manager
 
@@ -250,6 +252,9 @@ def _run_worker_process(
     except Exception:
         logger.exception("Worker failed")
 
+    if current_platform.is_hpu():
+        logger.info("Worker exiting")
+        return
     # Flush TunableOp results when TunableOp is enabled and
     # online (in situ) tuning is enabled.
     # Offline tuning API (record_untuned_is_enabled()) only

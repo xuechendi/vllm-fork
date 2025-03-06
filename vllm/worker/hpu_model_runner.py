@@ -625,6 +625,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             self.kv_cache_dtype,
             self.block_size,
             self.model_config.is_attention_free,
+            use_mla=self.model_config.use_mla,
         )
 
         # Lazy initialization
@@ -973,6 +974,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             multi_modal_placeholder_index_maps=
             None,  # FIXME(kzawora): mutli-modality will not work here
             enable_kv_scales_calculation=False,
+            input_positions=input_positions,
         )
         multi_modal_kwargs = MultiModalKwargs.batch(multi_modal_kwargs_list)
 
@@ -1132,6 +1134,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             slot_mapping=slot_mapping,
             multi_modal_placeholder_index_maps=None,
             enable_kv_scales_calculation=False,
+            input_positions=input_positions
         )
         return PrepareDecodeMetadata(input_tokens=input_tokens,
                                      input_positions=input_positions,
@@ -1337,7 +1340,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         attention_metadata = subtuple(metadata, 'TrimmedAttentionMetadata', [
             'attn_bias', 'seq_lens_tensor', 'block_list', 'block_mapping',
             'block_usage', 'slot_mapping', 'is_prompt', 'block_indices',
-            'block_offsets', 'block_scales', 'block_groups'
+            'block_offsets', 'block_scales', 'block_groups', 'input_positions'
         ])
         return attention_metadata
 

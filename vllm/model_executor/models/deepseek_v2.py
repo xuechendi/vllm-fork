@@ -56,7 +56,8 @@ from .interfaces import SupportsPP
 from .utils import (PPMissingLayer, is_pp_missing_parameter,
                     make_empty_intermediate_tensors_factory, make_layers,
                     maybe_prefix)
-
+from vllm.platforms import current_platform
+is_hpu = current_platform.is_hpu()
 
 class DeepseekV2MLP(nn.Module):
 
@@ -149,21 +150,33 @@ class DeepseekV2MoE(nn.Module):
             )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        num_tokens, hidden_dim = hidden_states.shape
+        if is_hpu:
+            batch_size, seq_len, hidden_dim = hidden_states.shape
+            num_tokens = batch_size * seq_len
+        else:
+            batch_size, seq_len = None, None
+            num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         if self.n_shared_experts is not None:
             shared_output = self.shared_experts(hidden_states)
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
-        final_hidden_states = self.experts(
-            hidden_states=hidden_states,
-            router_logits=router_logits) * self.routed_scaling_factor
+        if batch_size is not None:
+            final_hidden_states = self.experts(
+                hidden_states=hidden_states.view(batch_size, seq_len, hidden_dim),
+                router_logits=router_logits) * self.routed_scaling_factor
+        else:
+            final_hidden_states = self.experts(
+                hidden_states=hidden_states,
+                router_logits=router_logits) * self.routed_scaling_factor
         if shared_output is not None:
             final_hidden_states = final_hidden_states + shared_output
         if self.tp_size > 1:
             final_hidden_states = tensor_model_parallel_all_reduce(
                 final_hidden_states)
 
+        if batch_size is not None:
+            return final_hidden_states.view(batch_size, seq_len, hidden_dim)
         return final_hidden_states.view(num_tokens, hidden_dim)
 
 
@@ -280,9 +293,22 @@ class DeepseekV2Attention(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
+        if is_hpu:
+            # need reshape from tensor(x0, y0) to tensor(x1) for hpu
+            _batch_size = positions.shape[0]
+            positions = positions.reshape(positions.shape[0] *
+                                          positions.shape[1])
+            hidden_states = hidden_states.reshape(
+                hidden_states.shape[0] * hidden_states.shape[1],
+                hidden_states.shape[2])
         if self.q_lora_rank is not None:
-            q = self.q_a_proj(hidden_states)[0]
-            q = self.q_a_layernorm(q)
+            if is_hpu:
+                # w/a of SW-208144
+                q = self.q_a_proj(hidden_states)[0].unsqueeze(0)
+                q = self.q_a_layernorm(q).squeeze(0)
+            else:
+                q = self.q_a_proj(hidden_states)[0]
+                q = self.q_a_layernorm(q)
             q = self.q_b_proj(q)[0].view(-1, self.num_local_heads,
                                          self.qk_head_dim)
         else:
@@ -294,7 +320,11 @@ class DeepseekV2Attention(nn.Module):
         kv_a, _ = latent_cache.split(
             [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         latent_cache = latent_cache.unsqueeze(1)
-        kv_a = self.kv_a_layernorm(kv_a.contiguous())
+        if is_hpu:
+            kv_a = self.kv_a_layernorm(kv_a.contiguous().unsqueeze(0)).squeeze(
+                0)  # w/a of SW-208144
+        else:
+            kv_a = self.kv_a_layernorm(kv_a.contiguous())
         kv = self.kv_b_proj(kv_a)[0]
         kv = kv.view(-1, self.num_local_heads,
                      self.qk_nope_head_dim + self.v_head_dim)
@@ -311,12 +341,26 @@ class DeepseekV2Attention(nn.Module):
         v = torch.nn.functional.pad(
             v, [0, self.qk_head_dim - self.v_head_dim],
             value=0).view(-1, self.num_local_heads * self.qk_head_dim)
+        if is_hpu:
+            # need restore from tensor(x0, y0) to tensor(x1, y1, z1) for hpu
+            q = q.reshape(_batch_size, q.shape[0] // _batch_size, q.shape[1])
+            k = k.reshape(_batch_size, k.shape[0] // _batch_size, k.shape[1])
+            v = v.reshape(_batch_size, v.shape[0] // _batch_size, v.shape[1])
         attn_output = self.attn(q, k, v)
+        if is_hpu:
+            # need restore from tensor(x0, y0, z0) to tensor(x1, y1) for hpu
+            attn_output = attn_output.reshape(
+                attn_output.shape[0] * attn_output.shape[1],
+                attn_output.shape[2])
         attn_output = attn_output.view(
             -1, self.num_local_heads,
             self.qk_head_dim)[..., :self.v_head_dim].reshape(
                 -1, self.num_local_heads * self.v_head_dim)
         output, _ = self.o_proj(attn_output)
+        if is_hpu:
+            output = output.reshape(_batch_size,
+                                    output.shape[0] // _batch_size,
+                                    output.shape[1])
         return output
 
 
