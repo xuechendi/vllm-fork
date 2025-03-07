@@ -22,13 +22,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Inference-only DeepseekV2/DeepseekV3 model."""
-from typing import Any, Dict, Iterable, Optional, Set, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 import torch
 from torch import nn
 from transformers import PretrainedConfig
 
-from vllm.attention import Attention
+from vllm.attention import Attention, AttentionMetadata
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, ModelConfig, VllmConfig
 from vllm.distributed import (get_pp_group,
@@ -50,14 +50,16 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
 from vllm.model_executor.model_loader.weight_utils import (
     default_weight_loader, maybe_remap_kv_scale_name)
 from vllm.model_executor.sampling_metadata import SamplingMetadata
+from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 
 from .interfaces import SupportsPP
 from .utils import (PPMissingLayer, is_pp_missing_parameter,
                     make_empty_intermediate_tensors_factory, make_layers,
                     maybe_prefix)
-from vllm.platforms import current_platform
+
 is_hpu = current_platform.is_hpu()
+
 
 class DeepseekV2MLP(nn.Module):
 
@@ -103,9 +105,16 @@ class DeepseekV2MoE(nn.Module):
         prefix: str = "",
     ):
         super().__init__()
+        import os
+        self.ep_size = int(os.environ.get("VLLM_EP_SIZE", 1))
         self.tp_size = get_tensor_model_parallel_world_size()
         self.routed_scaling_factor = config.routed_scaling_factor
         self.n_shared_experts = config.n_shared_experts
+        self.routed_scaling_factor = config.routed_scaling_factor
+        if self.tp_size > config.n_routed_experts:
+            raise ValueError(
+                f"Tensor parallel size {self.tp_size} is greater than "
+                f"the number of experts {config.n_routed_experts}.")
 
         if config.hidden_act != "silu":
             raise ValueError(f"Unsupported activation: {config.hidden_act}. "
@@ -150,18 +159,15 @@ class DeepseekV2MoE(nn.Module):
             )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        if is_hpu:
-            batch_size, seq_len, hidden_dim = hidden_states.shape
-            num_tokens = batch_size * seq_len
-        else:
-            batch_size, seq_len = None, None
-            num_tokens, hidden_dim = hidden_states.shape
+        batch_size, seq_len, hidden_dim = hidden_states.shape
+        num_tokens = batch_size * seq_len
         hidden_states = hidden_states.view(-1, hidden_dim)
+        num_tokens = hidden_states.shape[0]
         if self.n_shared_experts is not None:
             shared_output = self.shared_experts(hidden_states)
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
-        if batch_size is not None:
+        if is_hpu:
             final_hidden_states = self.experts(
                 hidden_states=hidden_states.view(batch_size, seq_len, hidden_dim),
                 router_logits=router_logits) * self.routed_scaling_factor
@@ -175,9 +181,11 @@ class DeepseekV2MoE(nn.Module):
             final_hidden_states = tensor_model_parallel_all_reduce(
                 final_hidden_states)
 
-        if batch_size is not None:
-            return final_hidden_states.view(batch_size, seq_len, hidden_dim)
-        return final_hidden_states.view(num_tokens, hidden_dim)
+        if is_hpu:
+            return final_hidden_states.view(
+                batch_size, seq_len, hidden_dim)
+        else:
+            return final_hidden_states.view(num_tokens, hidden_dim)
 
 
 def yarn_get_mscale(scale: float = 1, mscale: float = 1) -> float:
@@ -292,6 +300,8 @@ class DeepseekV2Attention(nn.Module):
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
+        kv_cache: torch.Tensor,
+        attn_metadata: AttentionMetadata,
     ) -> torch.Tensor:
         if is_hpu:
             # need reshape from tensor(x0, y0) to tensor(x1) for hpu
@@ -346,7 +356,7 @@ class DeepseekV2Attention(nn.Module):
             q = q.reshape(_batch_size, q.shape[0] // _batch_size, q.shape[1])
             k = k.reshape(_batch_size, k.shape[0] // _batch_size, k.shape[1])
             v = v.reshape(_batch_size, v.shape[0] // _batch_size, v.shape[1])
-        attn_output = self.attn(q, k, v)
+        attn_output = self.attn(q, k, v, kv_cache, attn_metadata)
         if is_hpu:
             # need restore from tensor(x0, y0, z0) to tensor(x1, y1) for hpu
             attn_output = attn_output.reshape(
@@ -464,15 +474,9 @@ class DeepseekV2MLAAttention(nn.Module):
             mscale = yarn_get_mscale(scaling_factor, float(mscale_all_dim))
             self.scaling = self.scaling * mscale * mscale
 
-        # In the MLA backend, kv_cache includes both k_c and
-        # pe (i.e. decoupled position embeddings). In particular,
-        # the concat_and_cache_mla op requires
-        #     k_c.size(1) + k_pe.size(1) == kv_cache.size(2)
-        # i.e.
-        #     kv_lora_rank + qk_rope_head_dim == head_size
         self.mla_attn = Attention(
             num_heads=self.num_local_heads,
-            head_size=self.kv_lora_rank + self.qk_rope_head_dim,
+            head_size=self.kv_lora_rank,
             scale=self.scaling,
             num_kv_heads=1,
             cache_config=cache_config,
@@ -499,6 +503,8 @@ class DeepseekV2MLAAttention(nn.Module):
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
+        kv_cache: torch.Tensor,
+        attn_metadata: AttentionMetadata,
     ) -> torch.Tensor:
         if self.q_lora_rank is not None:
             ckq = self.q_a_proj(hidden_states)[0]
@@ -508,10 +514,8 @@ class DeepseekV2MLAAttention(nn.Module):
         kv_c, k_pe = self.kv_a_proj_with_mqa(hidden_states)[0].split(
             [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         kv_c_normed = self.kv_a_layernorm(kv_c.contiguous())
-        return self.mla_attn(hidden_states_or_q_c,
-                             kv_c_normed,
-                             k_pe,
-                             output_shape=hidden_states.shape)
+        return self.mla_attn(hidden_states_or_q_c, kv_c_normed, k_pe, kv_cache,
+                             attn_metadata)
 
 
 class DeepseekV2DecoderLayer(nn.Module):
@@ -580,6 +584,8 @@ class DeepseekV2DecoderLayer(nn.Module):
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
+        kv_cache: torch.Tensor,
+        attn_metadata: AttentionMetadata,
         residual: Optional[torch.Tensor],
     ) -> torch.Tensor:
         # Self Attention
@@ -592,6 +598,8 @@ class DeepseekV2DecoderLayer(nn.Module):
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
+            kv_cache=kv_cache,
+            attn_metadata=attn_metadata,
         )
 
         # Fully Connected
@@ -614,6 +622,7 @@ class DeepseekV2Model(nn.Module):
         cache_config = vllm_config.cache_config
         quant_config = vllm_config.quant_config
 
+        self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
         if get_pp_group().is_first_rank:
@@ -651,6 +660,8 @@ class DeepseekV2Model(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
+        kv_caches: List[torch.Tensor],
+        attn_metadata: AttentionMetadata,
         intermediate_tensors: Optional[IntermediateTensors],
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
@@ -665,8 +676,11 @@ class DeepseekV2Model(nn.Module):
             hidden_states = intermediate_tensors["hidden_states"]
             residual = intermediate_tensors["residual"]
 
-        for layer in self.layers[self.start_layer:self.end_layer]:
-            hidden_states, residual = layer(positions, hidden_states, residual)
+        for i in range(self.start_layer, self.end_layer):
+            layer = self.layers[i]
+            hidden_states, residual = layer(positions, hidden_states,
+                                            kv_caches[i - self.start_layer],
+                                            attn_metadata, residual)
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors({
@@ -688,12 +702,9 @@ class DeepseekV2ForCausalLM(nn.Module, SupportsPP):
         self.quant_config = quant_config
         self.model = DeepseekV2Model(vllm_config=vllm_config,
                                      prefix=maybe_prefix(prefix, "model"))
-        if get_pp_group().is_last_rank:
-            self.lm_head = ParallelLMHead(config.vocab_size,
-                                          config.hidden_size,
-                                          quant_config=quant_config)
-        else:
-            self.lm_head = PPMissingLayer()
+        self.lm_head = ParallelLMHead(config.vocab_size,
+                                      config.hidden_size,
+                                      quant_config=quant_config)
         self.logits_processor = LogitsProcessor(config.vocab_size)
         self.sampler = get_sampler()
         self.make_empty_intermediate_tensors = (
@@ -706,10 +717,13 @@ class DeepseekV2ForCausalLM(nn.Module, SupportsPP):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
+        kv_caches: List[torch.Tensor],
+        attn_metadata: AttentionMetadata,
         intermediate_tensors: Optional[IntermediateTensors] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
-        hidden_states = self.model(input_ids, positions, intermediate_tensors,
+        hidden_states = self.model(input_ids, positions, kv_caches,
+                                   attn_metadata, intermediate_tensors,
                                    inputs_embeds)
         return hidden_states
 
@@ -766,9 +780,13 @@ class DeepseekV2ForCausalLM(nn.Module, SupportsPP):
             if "rotary_emb.inv_freq" in name:
                 continue
 
-            spec_layer = get_spec_layer_idx_from_weight_name(self.config, name)
-            if spec_layer is not None:
-                continue  # skip spec decode layers for main model
+            # TODO(simon): support nextn predict layers
+            if hasattr(self.config, "num_nextn_predict_layers"
+                       ) and self.config.num_nextn_predict_layers > 0:
+                assert self.config.num_nextn_predict_layers == 1
+                layer_idx = self.config.num_hidden_layers
+                if name.startswith(f"model.layers.{layer_idx}"):
+                    continue
 
             for (param_name, weight_name, shard_id) in stacked_params_mapping:
                 # Skip non-stacked layers and experts (experts handled below).
@@ -790,6 +808,9 @@ class DeepseekV2ForCausalLM(nn.Module, SupportsPP):
                 if is_pp_missing_parameter(name, self):
                     continue
 
+                if name not in params_dict:
+                        continue
+
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
@@ -802,6 +823,9 @@ class DeepseekV2ForCausalLM(nn.Module, SupportsPP):
                     name = name.replace(weight_name, param_name)
 
                     if is_pp_missing_parameter(name, self):
+                        continue
+
+                    if name not in params_dict:
                         continue
 
                     param = params_dict[name]
@@ -825,6 +849,9 @@ class DeepseekV2ForCausalLM(nn.Module, SupportsPP):
                     if is_pp_missing_parameter(name, self):
                         continue
 
+                    if name not in params_dict:
+                        continue
+
                     param = params_dict[name]
                     weight_loader = getattr(param, "weight_loader",
                                             default_weight_loader)
@@ -835,15 +862,3 @@ class DeepseekV2ForCausalLM(nn.Module, SupportsPP):
 
 class DeepseekV3ForCausalLM(DeepseekV2ForCausalLM):
     pass
-
-
-def get_spec_layer_idx_from_weight_name(config: PretrainedConfig,
-                                        weight_name: str) -> Optional[int]:
-    if hasattr(config,
-               "num_nextn_predict_layers") and (config.num_nextn_predict_layers
-                                                > 0):
-        layer_idx = config.num_hidden_layers
-        for i in range(config.num_nextn_predict_layers):
-            if weight_name.startswith(f"model.layers.{layer_idx+i}."):
-                return layer_idx + i
-    return None
