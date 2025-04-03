@@ -50,10 +50,10 @@ def test_text(llm):
 def test_images(llm):
     image_urls = [
         "https://huggingface.co/datasets/huggingface/documentation-images/resolve/0052a70beed5bf71b92610a43a52df6d286cd5f3/diffusers/rabbit.jpg",
-        "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/datasets/cat_style_layout.png",
+        #"https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/datasets/cat_style_layout.png",
     ]
     # Create a sampling params object.
-    sampling_params = SamplingParams(temperature=0.6, top_p=0.9, max_tokens=4096)
+    sampling_params = SamplingParams(temperature=0.6, top_p=0.9, max_tokens=128)
     # Perform multi-image inference using llm.chat()
     outputs = llm.chat(
         [
@@ -62,7 +62,7 @@ def test_images(llm):
                 "content": [
                     {
                         "type": "text",
-                        "text": "Can you describe how these two images are similar, and how they differ?",
+                        "text": "What is inside the image?",
                     },
                     *(
                         {
@@ -135,7 +135,7 @@ def main():
         limit_mm_per_prompt={"image": 5},
     )
     print("---------Now start Completion test-----------")
-    test_text(llm)
+    test_images(llm)
     # if "instruct" in model_id.lower():
     #     print("---------Now start Instruct test-----------")
     #     test_text(llm)
