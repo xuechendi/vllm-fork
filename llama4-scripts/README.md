@@ -7,6 +7,8 @@ docker run -d -it --runtime=habana --name llama4-vllm-1.21 -v /software:/softwar
 
 docker exec -it llama4-vllm-1.21 /bin/bash
 
+cd /data/models; huggingface-cli download --local-dir Llama-4-Scout-17B-16E-Instruct meta-llama/Llama-4-Scout-17B-16E-Instruct --token ${YOUR_TOKEN}
+
 cd /software/users/${YOUR NAME}/;
 git clone https://github.com/intel-sandbox/llama4-private.git; cd vllm; git checkout llama4-vllm-hpu;
 pip install -r requirements-hpu.txt; VLLM_TARGET_DEVICE=hpu pip install -e .  --no-build-isolation;
@@ -15,12 +17,14 @@ pip install -r requirements-hpu.txt; VLLM_TARGET_DEVICE=hpu pip install -e .  --
 pip install pydantic msgspec cachetools cloudpickle psutil zmq blake3 py-cpuinfo aiohttp openai uvloop fastapi uvicorn watchfiles partial_json_parser python-multipart gguf llguidance prometheus_client numba compressed_tensors
 
 # install transformers to recognize the model
-pip install /software/stanley/models/llama4-final-v2/transformers_enablement_fork/transformers-4.51.0.dev0-py3-none-any.whl
+cd /software/users/${YOUR NAME}/;
+git clone https://github.com/huggingface/transformers.git; cd transformers
+pip install -e .
 ```
 
 ## run example
 ```
-python llama4-scripts/test_vllm.py --model_id /software/stanley/models/llama4-final-v2/Llama-4-Scout-17B-16E-Instruct/ 2>&1 | tee llama4-scripts/llama4_vllm.log
+PT_HPU_LAZY_MODE python llama4-scripts/test_vllm.py --model_id /software/stanley/models/llama4-final-v2/Llama-4-Scout-17B-16E-Instruct/ 2>&1 | tee llama4-scripts/llama4_vllm.log
 ```
 
 
