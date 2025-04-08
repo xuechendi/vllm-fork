@@ -16,58 +16,19 @@ pip install -r requirements-hpu.txt; VLLM_TARGET_DEVICE=hpu pip install -e .  --
 # install dependencies for llama4
 pip install pydantic msgspec cachetools cloudpickle psutil zmq blake3 py-cpuinfo aiohttp openai uvloop fastapi uvicorn watchfiles partial_json_parser python-multipart gguf llguidance prometheus_client numba compressed_tensors
 
-# install transformers to recognize the model
-cd /software/users/${YOUR NAME}/;
-git clone https://github.com/huggingface/transformers.git; cd transformers
-pip install -e .
 ```
 
 ## run example
 ```
-PT_HPU_LAZY_MODE=1 python llama4-scripts/test_vllm.py --model_id /software/stanley/models/llama4-final-v2/Llama-4-Scout-17B-16E-Instruct/ 2>&1 | tee llama4-scripts/llama4_vllm.log
+PT_HPU_LAZY_MODE=1 python llama4-scripts/test_vllm.py --model_id /data/models/Llama-4-Scout-17B-16E-Instruct/ 2>&1 | tee llama4-scripts/llama4_vllm.log
 ```
 
 
 ---
 
-
-This repo contains an in-progress vllm wheel that can be used to test Llama-4 models.
-
-Feel free to raise issues in [Community section](https://huggingface.co/ll-re/vllm_enablement_fork/discussions) if things are not working as expected.
-
-## Install transformers:
-
-please follow instructions from `ll-re/transformers_enablement_fork` to install the latest transformers
-
-
-## Install vllm
-please run the following:
-
-```
-huggingface-cli download ll-re/vllm_enablement_fork --local-dir ./vllm_enablement_fork
-cd vllm_enablement_fork
-
-# Install vllm from wheel
-pip install vllm-0.1.dev5638+gf7fafbf-cp310-cp310-linux_x86_64.whl
-
-# Install extra dependency
-pip install pydantic msgspec cachetools cloudpickle psutil zmq blake3 py-cpuinfo aiohttp openai uvloop fastapi uvicorn watchfiles partial_json_parser python-multipart gguf llguidance prometheus_client numba compressed_tensors
-
-# Download the models you want to test, eg:
-
-huggingface-cli download ll-re/Llama-4-Scout-17B-16E-Instruct --exclude="*.pth"
-huggingface-cli download ll-re/Llama-4-Maverick-17B-128E-Instruct --exclude="*.pth"
-
-```
-
-
-
-## Test vLLM
+## Test vLLM on GPU (used as reference output)
 
 ### Run following to test Llama-4-Scout-17B-16E-Instruct.
-```
-python test_vllm.py ll-re/Llama-4-Scout-17B-16E-Instruct 
-```
 
 Expected result:
 
