@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 import torch
+import habana_frameworks.torch.core as htcore
 import vllm_hpu_extension.kernels as kernels
 import vllm_hpu_extension.ops as ops
 from vllm_hpu_extension.flags import enabled_flags
@@ -24,6 +25,65 @@ from vllm.logger import init_logger
 
 logger = init_logger(__name__)
 
+def pa(attn, value, block_groups, block_mapping, block_scales, batch_size,
+       matmul_av_op, batch2block_matmul_op, block2batch_matmul_op):
+    attn_max = attn.amax(-1)
+    missing_dims = attn_max.dim() - block_scales.dim()
+    block_sum_attn = attn_max.mul(block_scales.reshape(-1, *[1 for _ in range(missing_dims)]))
+    block_sum_attn = attn_max
+    block_sum_attn = ops.block2batch(block_sum_attn, block_mapping, block2batch_matmul_op)
+    block_sum_attn = ops.batch2block(block_sum_attn, block_mapping, batch2block_matmul_op)
+    attn.sub_(block_sum_attn.unsqueeze(-1))
+    attn_max.sub_(block_sum_attn)
+    attn_max = attn_max.amax(0, keepdim=True)
+    attn.sub_(attn_max.unsqueeze(-1))
+    attn = attn.exp()
+    sums = attn.sum(dim=-1).unsqueeze(-1)
+    block_sum = sums
+    # Sum block's sums that belongs to the same sequeneces
+    sums = ops.block2batch(sums, block_mapping, block2batch_matmul_op)
+    group_sums = ops.batch2block(sums, block_mapping, batch2block_matmul_op)
+    group_sums.add_(torch.finfo(group_sums.dtype).tiny)
+    group_sums = torch.maximum(block_sum, group_sums)
+    attn.div_(group_sums)
+    attn = matmul_av_op(attn, value)
+    return attn
+
+def flat_pa(query, key_cache, value_cache, block_list, block_mapping,
+            block_bias, block_scales, block_groups, scale, matmul_qk_op,
+            matmul_av_op, batch2block_matmul_op, block2batch_matmul_op,
+            keys_fetch_func, values_fetch_func, **ignored_args):
+    batch_size, _, hidden_size = query.shape
+    _, _, kv_heads, head_size = key_cache.shape
+    q_heads = hidden_size // head_size
+
+    query_shape = (-1, q_heads, 1, head_size)
+    query = ops.batch2block(scale * query, block_mapping, batch2block_matmul_op).view(query_shape)
+    key = keys_fetch_func(key_cache, block_list).transpose(1, 2)
+    value = values_fetch_func(value_cache, block_list).transpose(1, 2)
+    block_bias = block_bias.view(key.size(0), 1, 1, -1)
+    if kv_heads != q_heads:
+        block_bias = block_bias.unsqueeze(1)
+        query = query.unflatten(1, (kv_heads, -1))
+        key = key.unflatten(1, (kv_heads, 1))
+        value = value.unflatten(1, (kv_heads, 1))
+        key = key.transpose(3, 4)
+    else:
+        key = key.transpose(2, 3)
+
+    attn = matmul_qk_op(query, key)
+    if 'fp32_softmax' in enabled_flags():
+        attn = attn.float()
+        htcore.mark_step()
+    attn = attn + block_bias
+    attn = pa(attn, value, block_groups, block_mapping, block_scales=block_scales,
+                        batch_size=batch_size, matmul_av_op=matmul_av_op,
+                        batch2block_matmul_op=batch2block_matmul_op, block2batch_matmul_op=block2batch_matmul_op)
+    attn = ops.block2batch(attn, block_mapping, block2batch_matmul_op)
+    attn = attn.squeeze(-2)
+    if kv_heads != q_heads:
+        attn = attn.flatten(1, 2)
+    return attn
 
 class HPUAttentionBackend(AttentionBackend):
 
@@ -266,13 +326,14 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             output = out.reshape(batch_size, seq_len, hidden_size)
         else:
             # Decoding run.
-            output = HPUPagedAttention.forward_decode(
+            output = flat_pa(
                 query=query,
                 key_cache=key_cache,
                 value_cache=value_cache,
                 block_list=attn_metadata.block_list,
                 block_mapping=attn_metadata.block_mapping,
                 block_bias=attn_metadata.attn_bias,
+                block_scales=attn_metadata.block_scales,
                 block_groups=attn_metadata.block_groups,
                 **self.common_attention_args())
         # Reshape the output tensor.
