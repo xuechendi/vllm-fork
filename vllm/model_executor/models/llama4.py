@@ -265,6 +265,7 @@ class Llama4DecoderLayer(nn.Module):
         rope_theta = config.rope_theta
         rope_scaling = config.rope_scaling
         max_position_embeddings = config.max_position_embeddings
+        self.prefix = prefix
 
         self.self_attn = Llama4Attention(
             config=config,
@@ -307,7 +308,10 @@ class Llama4DecoderLayer(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
         residual: Optional[torch.Tensor],
+        rank: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if rank == 0:
+            print(f"[DEBUG] layer {self.prefix} - input, hidden_states: {hidden_states}")
         # Self Attention
         if residual is None:
             residual = hidden_states
@@ -318,10 +322,14 @@ class Llama4DecoderLayer(nn.Module):
         hidden_states = self.self_attn(positions=positions,
                                        hidden_states=hidden_states)
 
+        if rank == 0:
+            print(f"[DEBUG] layer {self.prefix} - after attention, hidden_states: {hidden_states}")
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(
             hidden_states, residual)
         hidden_states = self.feed_forward(hidden_states)
+        if rank == 0:
+            print(f"[DEBUG] layer {self.prefix} - after fwd, hidden_states: {hidden_states}")
         return hidden_states, residual
 
 

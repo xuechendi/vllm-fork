@@ -52,7 +52,7 @@ def test_images(llm):
     # image_url = "https://d2opxh93rbxzdn.cloudfront.net/original/2X/4/40cfa8ca1f24ac29cfebcb1460b5cafb213b6105.png"
     image_url = "https://huggingface.co/datasets/patrickvonplaten/random_img/resolve/main/europe.png"
     # Create a sampling params object.
-    sampling_params = SamplingParams(temperature=0.6, top_p=0.9, max_tokens=128)
+    sampling_params = SamplingParams(temperature=0.6, top_p=0.9, max_tokens=2)
     # Perform multi-image inference using llm.chat()
     messages = [
          {

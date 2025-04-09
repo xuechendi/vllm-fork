@@ -290,6 +290,7 @@ class LlamaDecoderLayer(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
         residual: Optional[torch.Tensor],
+        rank: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
         if residual is None:
@@ -322,6 +323,7 @@ class LlamaModel(nn.Module):
         cache_config = vllm_config.cache_config
         quant_config = vllm_config.quant_config
         lora_config = vllm_config.lora_config
+        self.rank = vllm_config.parallel_config.rank
 
         self.config = config
         self.quant_config = quant_config
@@ -384,7 +386,7 @@ class LlamaModel(nn.Module):
             htorch.core.mark_step()
 
         for layer in self.layers[self.start_layer:self.end_layer]:
-            hidden_states, residual = layer(positions, hidden_states, residual)
+            hidden_states, residual = layer(positions, hidden_states, residual, self.rank)
 
         if not get_pp_group().is_last_rank:
             return IntermediateTensors({
