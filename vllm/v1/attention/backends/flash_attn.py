@@ -95,6 +95,10 @@ class FlashAttentionMetadata:
 
     # For logging.
     num_input_tokens: int = 0  # Number of tokens including padding.
+    
+    # Optional aot schedulingAdd commentMore actions
+    scheduler_metadata: Optional[torch.Tensor] = None
+    prefix_scheduler_metadata: Optional[torch.Tensor] = None
 
     # for local attention
     @dataclass

@@ -10,7 +10,6 @@ import torch.nn as nn
 
 import vllm.envs as envs
 from vllm.config import ParallelConfig, VllmConfig
-from vllm.device_allocator.cumem import CuMemAllocator
 from vllm.distributed import (ensure_model_parallel_initialized,
                               init_distributed_environment,
                               set_custom_all_reduce)
@@ -33,6 +32,11 @@ if TYPE_CHECKING:
 if current_platform.is_cuda():
     from vllm.device_allocator.cumem import CuMemAllocator
 
+def xpu_mem_get_info(local_rank):
+    used_memory = torch.xpu.memory_allocated()
+    total_gpu_memory = torch.xpu.get_device_properties(local_rank).total_memory
+    init_gpu_memory = total_gpu_memory - used_memory
+    return init_gpu_memory, total_gpu_memory
 
 class Worker(WorkerBase):
 
@@ -110,7 +114,10 @@ class Worker(WorkerBase):
             _check_if_gpu_supports_dtype(self.model_config.dtype)
             gc.collect()
             torch.cuda.empty_cache()
-            self.init_gpu_memory = torch.cuda.mem_get_info()[0]
+            if current_platform.is_cuda():
+                self.init_gpu_memory = torch.cuda.mem_get_info()[0]
+            else:
+                self.init_gpu_memory = xpu_mem_get_info(self.local_rank)[0]
             backend = current_platform.dist_backend
         else:
             raise RuntimeError(
@@ -157,12 +164,18 @@ class Worker(WorkerBase):
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
 
-        _, total_gpu_memory = torch.cuda.mem_get_info()
+        if current_platform.is_cuda():
+            _, total_gpu_memory = torch.cuda.mem_get_info()
+        else:
+            _, total_gpu_memory = xpu_mem_get_info(self.local_rank)
         # Execute a forward pass with dummy inputs to profile the memory usage
         # of the model.
         self.model_runner.profile_run()
 
-        free_gpu_memory, _ = torch.cuda.mem_get_info()
+        if current_platform.is_cuda():
+            free_gpu_memory, _ = torch.cuda.mem_get_info()
+        else:
+            free_gpu_memory, _ = xpu_mem_get_info(self.local_rank)
         # NOTE(woosuk): Here we assume that the other processes using the same
         # GPU did not change their memory usage during the profiling.
         assert self.init_gpu_memory > free_gpu_memory, (
@@ -180,8 +193,12 @@ class Worker(WorkerBase):
         torch.cuda.empty_cache()
         torch_allocated_bytes = torch.cuda.memory_stats(
         )["allocated_bytes.all.current"]
-        total_allocated_bytes = torch.cuda.mem_get_info(
-        )[1] - torch.cuda.mem_get_info()[0]
+        if current_platform.is_cuda():
+            total_allocated_bytes = torch.cuda.mem_get_info()[1] - torch.cuda.mem_get_info()[0]
+        else:
+            free_mem, total_mem = xpu_mem_get_info(self.local_rank)
+            total_allocated_bytes = total_mem - free_mem
+            
         non_torch_allocations = total_allocated_bytes - torch_allocated_bytes
         if non_torch_allocations > 0:
             peak_memory += non_torch_allocations
