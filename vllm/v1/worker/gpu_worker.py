@@ -117,7 +117,8 @@ class Worker(WorkerBase):
             if current_platform.is_cuda():
                 self.init_gpu_memory = torch.cuda.mem_get_info()[0]
             else:
-                self.init_gpu_memory = xpu_mem_get_info(self.local_rank)[0]
+                self.init_gpu_memory = torch.xpu.get_device_properties(
+                self.local_rank).total_memory
             backend = current_platform.dist_backend
         else:
             raise RuntimeError(
@@ -176,32 +177,7 @@ class Worker(WorkerBase):
             free_gpu_memory, _ = torch.cuda.mem_get_info()
         else:
             free_gpu_memory, _ = xpu_mem_get_info(self.local_rank)
-        # NOTE(woosuk): Here we assume that the other processes using the same
-        # GPU did not change their memory usage during the profiling.
-        assert self.init_gpu_memory > free_gpu_memory, (
-            "Error in memory profiling. "
-            f"Initial free memory {self.init_gpu_memory}, current free memory"
-            f" {free_gpu_memory}. This happens when the GPU memory was "
-            "not properly cleaned up before initializing the vLLM instance.")
-
-        # Get the peak memory allocation recorded by torch
-        peak_memory = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
-
-        # Check for any memory left around that may have been allocated on the
-        # gpu outside of `torch`. NCCL operations, for example, can use a few
-        # GB during a forward pass
-        torch.cuda.empty_cache()
-        torch_allocated_bytes = torch.cuda.memory_stats(
-        )["allocated_bytes.all.current"]
-        if current_platform.is_cuda():
-            total_allocated_bytes = torch.cuda.mem_get_info()[1] - torch.cuda.mem_get_info()[0]
-        else:
-            free_mem, total_mem = xpu_mem_get_info(self.local_rank)
-            total_allocated_bytes = total_mem - free_mem
-            
-        non_torch_allocations = total_allocated_bytes - torch_allocated_bytes
-        if non_torch_allocations > 0:
-            peak_memory += non_torch_allocations
+        peak_memory = self.init_gpu_memory - free_gpu_memory
         available_kv_cache_memory = (
             total_gpu_memory * self.cache_config.gpu_memory_utilization -
             peak_memory)
