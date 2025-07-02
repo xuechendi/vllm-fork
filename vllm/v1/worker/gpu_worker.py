@@ -172,15 +172,19 @@ class Worker(WorkerBase):
         # Execute a forward pass with dummy inputs to profile the memory usage
         # of the model.
         self.model_runner.profile_run()
+        torch.xpu.synchronize()
 
         if current_platform.is_cuda():
             free_gpu_memory, _ = torch.cuda.mem_get_info()
         else:
             free_gpu_memory, _ = xpu_mem_get_info(self.local_rank)
+        #free_gpu_memory = free_gpu_memory * self.cache_config.gpu_memory_utilization
         peak_memory = self.init_gpu_memory - free_gpu_memory
+        peak_memory = peak_memory / self.cache_config.gpu_memory_utilization
         available_kv_cache_memory = (
             total_gpu_memory * self.cache_config.gpu_memory_utilization -
             peak_memory)
+        print(f"{available_kv_cache_memory=}, {peak_memory=}, {total_gpu_memory=}")
 
         return int(available_kv_cache_memory)
 
