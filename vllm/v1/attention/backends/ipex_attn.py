@@ -24,10 +24,16 @@ if TYPE_CHECKING:
 @dataclass
 class IPEXAttentionMetadata(FlashAttentionMetadata):
     seq_start_loc: torch.Tensor = torch.tensor([0], dtype=torch.int64)
+    decode_num: int = 0
+    prompt_num: int = 0
+    seq_lens_q: Optional[torch.Tensor] = None
 
     def __init__(self,
                  flash_attn_metadata: FlashAttentionMetadata,
                  seq_start_loc: torch.Tensor = None,
+                 decode_num: int = 0,
+                 prompt_num: int = 0,
+                 seq_lens_q: Optional[torch.Tensor] = None,
                  **kwargs) -> None:
         super().__init__(**flash_attn_metadata.__dict__, **kwargs)
         if seq_start_loc is not None:
@@ -36,6 +42,9 @@ class IPEXAttentionMetadata(FlashAttentionMetadata):
             self.seq_start_loc = torch.tensor([0],
                                               dtype=torch.int64,
                                               device=self.block_table.device)
+        self.decode_num = decode_num
+        self.prompt_num = prompt_num
+        self.seq_lens_q = seq_lens_q
 
 
 class IPEXAttentionMetadataBuilder(FlashAttentionMetadataBuilder):
@@ -49,7 +58,62 @@ class IPEXAttentionMetadataBuilder(FlashAttentionMetadataBuilder):
 
     def reorder_batch(self, input_batch: "InputBatch",
                       scheduler_output: "SchedulerOutput") -> bool:
-        return False
+        # We now want to reorder the batch so that the "decode" requests are and
+        # the front and the "prefill" requests are at the using the least amount
+        # swaps possible. (NOTE for now we loosely use "decode" to mean requests
+        # where attention is likely memory-bound and "prefill" to mean requests
+        # where attention is likely compute-bound, TODO(lucas): figure out a
+        # better naming here)
+        decodes = []
+        prefills = []
+        num_decode_tokens = 0
+        num_prefill_tokens = 0
+
+        for i, req_id in enumerate(input_batch.req_ids):
+            num_tokens = scheduler_output.num_scheduled_tokens[req_id]
+            # for now treat 1 scheduled token as "decode" even if its not,
+            # we should update this to something like < 8 in the future but
+            # currently the decode run only supports num_tokens = 1
+            if num_tokens == 1:
+                decodes.append(i)
+                num_decode_tokens += num_tokens
+            else:
+                prefills.append(i)
+                num_prefill_tokens += num_tokens
+
+        # We hope that this is fairly minimal since decodes
+        # should be around for a number of iterations so hopefully they are
+        # relatively stationary (and new request are generally appended to the
+        # persistent batch so already should be at the back)
+        # To achieve this we loop over the decodes in descending order and
+        # the prefills in ascending order. We swap decodes from the  "back"
+        # i.e. past where the last decode should be in the reodorered with
+        # prefills from the front of the batch.
+        # `decodes` and `prefills` are already in ascending order just based on
+        # the above loop
+        num_decodes = len(decodes)
+        num_prefills = len(prefills)
+        modified_batch = False
+
+        for i in range(1, min(num_decodes, num_prefills) + 1):
+            # If the decode is at the "back" of the batch, i, we can swap it
+            # with the prefill closest to the front of the batch
+            decode_idx = decodes[num_decodes - i]
+            if decode_idx < num_decodes:
+                break
+
+            input_batch.swap_states(prefills[i - 1], decode_idx)
+            modified_batch = True
+
+        # Save for next `build` call
+        # TODO(lucas): this is a bit of a hack, we should probably have a
+        # better way of doing this
+        self._num_decodes = num_decodes
+        self._num_prefills = num_prefills
+        self._num_decode_tokens = num_decode_tokens
+        self._num_prefill_tokens = num_prefill_tokens
+
+        return modified_batch
 
     def build(self, num_reqs: int, num_actual_tokens: int, max_query_len: int,
               common_prefix_len: int,
@@ -60,8 +124,17 @@ class IPEXAttentionMetadataBuilder(FlashAttentionMetadataBuilder):
         seq_start_loc_cpu = self.runner.seq_start_loc_cpu[:num_reqs + 1]
         seq_start_loc = seq_start_loc_cpu.to(self.runner.device,
                                              non_blocking=True)
-        return IPEXAttentionMetadata(attn_metadata,
-                                     seq_start_loc=seq_start_loc)
+        decode_num = self.runner.decode_num
+        prompt_num = self.runner.prompt_num
+        seq_lens_q_cpu = self.runner.seq_lens_q_cpu
+        seq_lens_q = seq_lens_q_cpu.to(self.runner.device, non_blocking=True)
+        return IPEXAttentionMetadata(
+            attn_metadata,
+            seq_start_loc=seq_start_loc,
+            decode_num=decode_num,
+            prompt_num=prompt_num,
+            seq_lens_q=seq_lens_q,
+        )
 
 
 class IPEXAttentionBackend(AttentionBackend):
@@ -93,7 +166,7 @@ class IPEXAttentionBackend(AttentionBackend):
     ) -> tuple[int, ...]:
         if block_size % 16 != 0:
             raise ValueError("Block size must be a multiple of 16.")
-        return (2, num_blocks, block_size, num_kv_heads, head_size)
+        return (2, num_blocks, num_kv_heads, head_size, block_size)
 
     @staticmethod
     def get_builder_cls() -> type["IPEXAttentionMetadataBuilder"]:
@@ -156,6 +229,114 @@ class IPEXAttentionImpl(AttentionImpl):
                                       "IpexAttnBackendImpl")
 
     def forward(
+        self,
+        layer: AttentionLayer,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        kv_cache: torch.Tensor,
+        attn_metadata: IPEXAttentionBackend,
+        output: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Forward pass with IPEXAttention.
+        Args:
+            query: shape = [num_tokens, num_heads * head_size]
+            key: shape = [num_tokens, num_kv_heads * head_size]
+            value: shape = [num_tokens, num_kv_heads * head_size]
+            kv_cache = [2, num_blocks, block_size, num_kv_heads, head_size]
+            attn_metadata: Metadata for attention.
+        Returns:
+            shape = [num_tokens, num_heads * head_size]
+        """
+
+        assert output is not None, "Output tensor must be provided."
+        if attn_metadata is None:
+            # Profiling run.
+            return output
+        # print(attn_metadata.decode_num)
+        decode_num = attn_metadata.decode_num
+        prompt_num = attn_metadata.prompt_num
+
+        num_heads = self.num_heads
+        head_size = self.head_size
+        num_kv_heads = self.num_kv_heads
+        query = query.view(-1, num_heads, head_size)
+        key = key.view(-1, num_kv_heads, head_size)
+        value = value.view(-1, num_kv_heads, head_size)
+        # Reshape the input keys and values and store them in the cache.
+        key_cache, value_cache = kv_cache.unbind(0)
+        (num_blocks, num_kv_heads, head_size, block_size) = key_cache.shape
+
+        # 0. write kv to cache.
+        ipex_ops.reshape_and_cache(
+            key=key,
+            value=value,
+            key_cache=key_cache.view(num_blocks, num_kv_heads, head_size,
+                                     block_size, 1),
+            value_cache=value_cache,
+            slot_mapping=attn_metadata.slot_mapping.flatten(),
+            kv_cache_dtype=self.kv_cache_dtype,
+            k_scale=layer._k_scale_float,
+            v_scale=layer._v_scale_float,
+        )
+
+        # 1. process decode if any
+        if decode_num > 0:
+            ipex_ops.paged_attention_v1(
+                out=output[:decode_num],
+                query=query[:decode_num],
+                key_cache=key_cache.view(num_blocks, num_kv_heads, head_size,
+                                         block_size, 1),
+                value_cache=value_cache,
+                num_kv_heads=num_kv_heads,
+                scale=self.scale,
+                block_tables=attn_metadata.block_table,
+                context_lens=attn_metadata.seq_lens[:decode_num],
+                block_size=block_size,
+                max_context_len=attn_metadata.max_seq_len,
+                alibi_slopes=self.alibi_slopes,
+                kv_cache_dtype=self.kv_cache_dtype,
+                k_scale=layer._k_scale_float,
+                v_scale=layer._v_scale_float,
+            )
+        # 2. process prefill if any
+        if prompt_num >= 1:
+            ipex_ops.varlen_attention(
+                query=query[
+                    decode_num:,
+                ],
+                key=key[
+                    decode_num:,
+                ],
+                value=value[
+                    decode_num:,
+                ],
+                out=output[
+                    decode_num:,
+                ],
+                seqlen_q=attn_metadata.seq_lens_q[
+                    :prompt_num + 1,
+                ],
+                seqlen_k=attn_metadata.seq_lens_q[
+                    :prompt_num + 1,
+                ],
+                alibi_slopes=self.alibi_slopes,
+                max_seqlen_q=attn_metadata.max_seq_len,
+                max_seqlen_k=attn_metadata.max_seq_len,
+                pdropout=0.0,
+                softmax_scale=self.scale,
+                zero_tensors=False,
+                is_causal=True,
+                return_softmax=False,
+                gen_=None,
+                window_size_left=-1,
+                window_size_right=-1,
+                logits_soft_cap=self.logits_soft_cap,
+            )
+
+        return
+
+    def forward_chunk_prefill(
         self,
         layer: AttentionLayer,
         query: torch.Tensor,
