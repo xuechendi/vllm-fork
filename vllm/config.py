@@ -1388,7 +1388,7 @@ class ModelConfig:
 
 
 BlockSize = Literal[1, 8, 16, 32, 64, 128]
-CacheDType = Literal["auto", "fp8", "fp8_e4m3", "fp8_e5m2"]
+CacheDType = Literal["auto", "int8", "fp8", "fp8_e4m3", "fp8_e5m2"]
 PrefixCachingHashAlgo = Literal["builtin", "sha256"]
 
 

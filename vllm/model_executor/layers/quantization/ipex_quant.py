@@ -13,6 +13,7 @@ from vllm.model_executor.layers.quantization.awq import (AWQLinearMethod,
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig)
 from vllm.model_executor.layers.quantization.gptq import GPTQLinearMethod
+from vllm.model_executor.layers.quantization.kv_cache import BaseKVCacheMethod
 from vllm.model_executor.parameter import (ModelWeightParameter,
                                            PerTensorScaleParameter)
 from vllm.model_executor.utils import set_weight_attrs
@@ -130,6 +131,7 @@ class IPEXConfig(QuantizationConfig):
 
     def get_quant_method(self, layer: torch.nn.Module,
                          prefix: str) -> Optional["LinearMethodBase"]:
+        from vllm.attention.layer import Attention
         if isinstance(layer, LinearBase):
             if self.method == "awq":
                 if is_layer_skipped_awq(prefix, self.modules_to_not_convert):
@@ -139,6 +141,8 @@ class IPEXConfig(QuantizationConfig):
                 return IPEXGPTQLinearMethod(self)
             if self.method == "auto-round" or self.method == "fp8":
                 return IPEXAutoRoundLinearMethod(self)
+        if isinstance(layer, Attention):
+            return BaseKVCacheMethod(self)
         return None
 
 class IPEXAutoRoundLinearMethod(LinearMethodBase):
@@ -346,3 +350,4 @@ class IPEXAWQLinearMethod(AWQLinearMethod):
         reshaped_x = x.reshape(-1, x.shape[-1])
         out = layer.ipex_qlinear(reshaped_x)
         return out.reshape(x.shape[:-1] + (layer.ipex_output_size, ))
+

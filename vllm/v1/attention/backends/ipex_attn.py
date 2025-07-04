@@ -166,7 +166,7 @@ class IPEXAttentionBackend(AttentionBackend):
     ) -> tuple[int, ...]:
         if block_size % 16 != 0:
             raise ValueError("Block size must be a multiple of 16.")
-        return (2, num_blocks, num_kv_heads, head_size, block_size)
+        return (2, num_blocks, block_size, num_kv_heads, head_size)
 
     @staticmethod
     def get_builder_cls() -> type["IPEXAttentionMetadataBuilder"]:
@@ -265,19 +265,21 @@ class IPEXAttentionImpl(AttentionImpl):
         value = value.view(-1, num_kv_heads, head_size)
         # Reshape the input keys and values and store them in the cache.
         key_cache, value_cache = kv_cache.unbind(0)
-        (num_blocks, num_kv_heads, head_size, block_size) = key_cache.shape
+        (num_blocks, block_size, num_kv_heads, head_size) = key_cache.shape
 
         # 0. write kv to cache.
-        ipex_ops.reshape_and_cache(
+        k_scale = 1 / layer._k_scale_float
+        v_scale = 1 / layer._v_scale_float
+
+        ipex_ops.reshape_and_cache_flash(
             key=key,
             value=value,
-            key_cache=key_cache.view(num_blocks, num_kv_heads, head_size,
-                                     block_size, 1),
+            key_cache=key_cache,
             value_cache=value_cache,
             slot_mapping=attn_metadata.slot_mapping.flatten(),
             kv_cache_dtype=self.kv_cache_dtype,
-            k_scale=layer._k_scale_float,
-            v_scale=layer._v_scale_float,
+            k_scale=k_scale,
+            v_scale=v_scale,
         )
 
         # 1. process decode if any
@@ -285,8 +287,7 @@ class IPEXAttentionImpl(AttentionImpl):
             ipex_ops.paged_attention_v1(
                 out=output[:decode_num],
                 query=query[:decode_num],
-                key_cache=key_cache.view(num_blocks, num_kv_heads, head_size,
-                                         block_size, 1),
+                key_cache=key_cache,
                 value_cache=value_cache,
                 num_kv_heads=num_kv_heads,
                 scale=self.scale,
@@ -375,7 +376,6 @@ class IPEXAttentionImpl(AttentionImpl):
 
         # Reshape the input keys and values and store them in the cache.
         key_cache, value_cache = kv_cache.unbind(0)
-
         ipex_ops.reshape_and_cache_flash(
             key[:num_actual_tokens],
             value[:num_actual_tokens],

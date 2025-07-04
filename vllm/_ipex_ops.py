@@ -73,10 +73,9 @@ class ipex_ops:
         blocksparse_block_size: int = 64,
         blocksparse_head_sliding_step: int = 0,
     ) -> None:
-        assert kv_cache_dtype == "auto"
         num_heads = out.size(1)
         num_queries_per_tokens = num_heads // num_kv_heads
-        ipex.llm.modules.PagedAttention.single_query_kv_attention(
+        ipex.llm.modules.PagedAttention.single_query_cached_kv_attention(
             out,
             query.contiguous(),
             key_cache.view_as(value_cache),
@@ -88,6 +87,11 @@ class ipex_ops:
             block_size,
             max_context_len,
             alibi_slopes,
+            kv_cache_dtype,
+            -1,
+            k_scale,
+            v_scale,
+            -1.0,
         )
 
     @staticmethod
