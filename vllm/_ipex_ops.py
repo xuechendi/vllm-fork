@@ -76,6 +76,8 @@ class ipex_ops:
         assert kv_cache_dtype == "auto"
         num_heads = out.size(1)
         num_queries_per_tokens = num_heads // num_kv_heads
+        if not isinstance(num_queries_per_tokens, torch.Tensor):
+            num_queries_per_tokens = torch.tensor(num_queries_per_tokens, device=query.device)
         ipex.llm.modules.PagedAttention.single_query_kv_attention(
             out,
             query.contiguous(),
