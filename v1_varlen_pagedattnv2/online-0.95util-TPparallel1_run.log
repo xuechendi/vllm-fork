@@ -1,0 +1,38 @@
+[W715 22:19:42.118523133 OperatorEntry.cpp:154] Warning: Warning only once for all operators,  other operators may also be overridden.
+  Overriding a previously registered kernel for the same operator and the same dispatch key
+  operator: aten::geometric_(Tensor(a!) self, float p, *, Generator? generator=None) -> Tensor(a!)
+    registered at /pytorch/build/aten/src/ATen/RegisterSchema.cpp:6
+  dispatch key: XPU
+  previous kernel: registered at /pytorch/aten/src/ATen/VmapModeRegistrations.cpp:37
+       new kernel: registered at /build/intel-pytorch-extension/build/Release/csrc/gpu/csrc/gpu/xpu/ATen/RegisterXPU_0.cpp:186 (function operator())
+INFO 07-15 22:19:43 [__init__.py:253] Automatically detected platform xpu.
+Namespace(backend='vllm', base_url=None, host='127.0.0.1', port=18080, endpoint='/v1/completions', dataset_name='sharegpt', dataset_path='benchmarks/ShareGPT_V3_unfiltered_cleaned_split.json', max_concurrency=64, model='/model/meta-llama/Llama-2-7b-chat-hf', tokenizer=None, use_beam_search=False, num_prompts=1024, logprobs=None, request_rate=inf, burstiness=1.0, seed=0, trust_remote_code=False, disable_tqdm=False, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir='benchmark_logs', result_filename=None, ignore_eos=False, percentile_metrics='ttft,tpot,itl', metric_percentiles='99', goodput=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, random_input_len=1024, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, hf_subset=None, hf_split=None, hf_output_len=None, top_p=None, top_k=None, min_p=None, temperature=None, tokenizer_mode='auto', served_model_name=None, lora_modules=None)
+Starting initial single prompt test run...
+Initial test run completed. Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 64
+  0%|          | 0/1024 [00:00<?, ?it/s]  0%|          | 1/1024 [00:00<01:50,  9.27it/s]  7%|▋         | 67/1024 [00:00<00:02, 322.54it/s] 13%|█▎        | 133/1024 [00:00<00:02, 416.12it/s] 19%|█▉        | 198/1024 [00:00<00:01, 470.48it/s] 26%|██▌       | 262/1024 [00:00<00:01, 502.24it/s] 32%|███▏      | 332/1024 [00:00<00:01, 551.46it/s] 40%|████      | 411/1024 [00:00<00:00, 617.20it/s] 48%|████▊     | 493/1024 [00:00<00:00, 673.78it/s] 60%|██████    | 617/1024 [00:01<00:00, 829.73it/s] 72%|███████▏  | 741/1024 [00:01<00:00, 942.03it/s] 82%|████████▏ | 837/1024 [00:01<00:00, 922.85it/s] 91%|█████████ | 930/1024 [00:01<00:00, 906.65it/s]100%|██████████| 1024/1024 [00:01<00:00, 740.14it/s]
+/workspace/code/vllm-xpu/benchmarks/benchmark_serving.py:425: UserWarning: All requests failed. This is likely due to a misconfiguration on the benchmark arguments.
+  metrics, actual_output_lens = calculate_metrics(
+============ Serving Benchmark Result ============
+Successful requests:                     0         
+Benchmark duration (s):                  1.38      
+Total input tokens:                      0         
+Total generated tokens:                  0         
+Request throughput (req/s):              0.00      
+Output token throughput (tok/s):         0.00      
+Total Token throughput (tok/s):          0.00      
+---------------Time to First Token----------------
+Mean TTFT (ms):                          0.00      
+Median TTFT (ms):                        0.00      
+P99 TTFT (ms):                           0.00      
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          0.00      
+Median TPOT (ms):                        0.00      
+P99 TPOT (ms):                           0.00      
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           0.00      
+Median ITL (ms):                         0.00      
+P99 ITL (ms):                            0.00      
+==================================================
