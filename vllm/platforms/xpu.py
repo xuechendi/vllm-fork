@@ -113,7 +113,7 @@ class XPUPlatform(Platform):
 
         # check and update parallel config
         parallel_config = vllm_config.parallel_config
-        parallel_config.worker_cls = "vllm.v1.worker.xpu_worker.XPUWorker"
+        parallel_config.worker_cls = "vllm.v1.worker.gpu_worker.Worker"
 
         if parallel_config.distributed_executor_backend is None:
             if parallel_config.world_size > 1:
