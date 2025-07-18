@@ -2,14 +2,14 @@
 # Check if the number of arguments is zero
 if (( $# == 0 )); then
     # Print an error message to standard error (>&2)
-    echo "Error: Please provide model_path." >&2
+    echo "Error: Please provide model_path TP_size" >&2
     # Exit with a non-zero status code to indicate an error
     exit 1
 fi
 model=$1
 gpu_utils=0.9
 num_prompts=1024
-tp_parrallel=1
+tp_parrallel=2
 
 branch_name=$(git branch --show-current)
 model_name=$(basename "$model")
@@ -44,18 +44,25 @@ else
     fi
 fi
 
-
+ZE_AFFINITY_MASK=6,7 \
+CCL_ATL_TRANSPORT=ofi \
+CCL_ZE_IPC_EXCHANGE=drmfd \
 VLLM_USE_V1=1 \
+TORCH_LLM_ALLREDUCE=1 \
+CCL_TOPO_FABRIC_VERTEX_CONNECTION_CHECK=0 \
+VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 \
 python -m vllm.entrypoints.openai.api_server \
     --port 18080 \
     --model ${model} \
     --tensor-parallel-size ${tp_parrallel} \
     --disable-log-requests \
+    --max-num-batched-tokens=8192 \
+    --max-model-len=8192 \
     --dtype float16 \
     --block-size 64 \
     --enforce-eager --no-enable-prefix-caching \
     --gpu_memory_utilization ${gpu_utils} \
-    --trust-remote-code 2>&1 | tee benchmark_logs/${log_name}_serving.log &
+    --trust_remote_code 2>&1 | tee benchmark_logs/${log_name}_serving.log &
 pid=$(($!-1))
 
 until [[ "$n" -ge 1000 ]] || [[ $ready == true ]]; do
@@ -75,8 +82,8 @@ python benchmarks/benchmark_serving.py \
     --backend vllm \
     --model ${model} \
     --max_concurrency 256 \
-    --trust-remote-code  \
     --dataset-name sharegpt \
+    --trust_remote_code \
     --dataset-path benchmarks/ShareGPT_V3_unfiltered_cleaned_split.json \
     --num-prompts ${num_prompts} \
     --port 18080  2>&1 | tee benchmark_logs/${log_name}_run.log
