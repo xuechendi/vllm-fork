@@ -424,6 +424,7 @@ class ShareGPTDataset(BenchmarkDataset):
                 prompt_len,
                 new_output_len,
                 skip_min_output_len_check=output_len is not None,
+                max_prompt_len=3072,
             ):
                 continue
             if enable_multimodal_chat:

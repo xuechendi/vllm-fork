@@ -971,6 +971,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         environment.set_vllm_config(vllm_config)
         self.is_driver_worker = is_driver_worker
         self.return_hidden_states = return_hidden_states
+        self.torch_profiler_steps = 0
 
         self.sliding_window = (self.model_config.get_sliding_window()
                                if self.model_config is not None else None)
@@ -3659,6 +3660,17 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                 seq_len = 1
             img_args = self._get_img_args_from_model_input(model_input)
             use_graphs = self._use_graphs(img_args=img_args)
+            if hasattr(self, "torch_profiler"):
+                if batch_size == 32 and self.torch_profiler_steps == 0:
+                    self.torch_profiler.start()
+                    self.torch_profiler_steps += 1
+                    logger.info("profiler started in HPUModelRunner")
+                elif self.torch_profiler_steps > 0:
+                    self.torch_profiler_steps += 1
+                    if self.torch_profiler_steps == 100:
+                        self.torch_profiler.stop()
+                        logger.info("profiler stopped in HPUModelRunner")
+
             self._check_config(batch_size, seq_len, ctx_blocks, attn_metadata,
                                warmup_mode)
             lora_mask: torch.Tensor = None

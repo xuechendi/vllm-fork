@@ -129,6 +129,8 @@ class HPUWorker(LocalOrDistributedWorkerBase):
     def start_profile(self):
         if self.profiler is None:
             raise RuntimeError("Profiler is not enabled.")
+        self.model_runner.torch_profiler = self.profiler
+        return
         high_level_profiler = self.model_runner.profiler
         with high_level_profiler.record_event('internal', 'start_profiler'):
             # Clean up the queue
@@ -142,7 +144,7 @@ class HPUWorker(LocalOrDistributedWorkerBase):
     def stop_profile(self):
         if self.profiler is None:
             raise RuntimeError("Profiler is not enabled.")
-        self.profiler.stop()
+        #self.profiler.stop()
 
     def _set_env_vars(self):
         local_rank = self.local_rank
