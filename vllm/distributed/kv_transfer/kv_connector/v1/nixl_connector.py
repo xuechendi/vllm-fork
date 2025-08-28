@@ -34,6 +34,7 @@ from vllm.utils import make_zmq_path, make_zmq_socket
 from vllm.v1.attention.backends.utils import get_kv_cache_layout
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.request import RequestStatus
+import os
 
 if TYPE_CHECKING:
     from vllm.attention.backends.abstract import AttentionMetadata
@@ -51,6 +52,7 @@ logger = init_logger(__name__)
 # Lazy import nixl_wrapper to avoid loading nixl_bindings if nixl is not used
 try:
     from nixl._api import nixl_agent as NixlWrapper
+    from nixl._api import nixl_agent_config
     logger.info("NIXL is available")
 except ImportError:
     logger.warning("NIXL is not available")
@@ -63,7 +65,6 @@ _NIXL_SUPPORTED_XPUS = {
     "tpu": ("cpu", ),
     "xpu": ("cpu", ),
 }
-
 
 class NixlAgentMetadata(
         msgspec.Struct,
@@ -433,8 +434,10 @@ class NixlConnectorWorker:
         self.vllm_config = vllm_config
         self.block_size = vllm_config.cache_config.block_size
 
+        self.nixl_backend = os.environ.get("VLLM_NIXL_BACKEND", "UCX").upper()
         # Agent.
-        self.nixl_wrapper = NixlWrapper(str(uuid.uuid4()), None)
+        config = nixl_agent_config(backends=[self.nixl_backend])
+        self.nixl_wrapper = NixlWrapper(str(uuid.uuid4()), config)
         # Map of engine_id -> {rank0: agent_name0, rank1: agent_name1..}.
         self._remote_agents: dict[EngineId, dict[int, str]] = defaultdict(dict)
 
@@ -471,7 +474,7 @@ class NixlConnectorWorker:
         # used when xPU memory can not be registered under nixl
         self.host_xfer_buffers: dict[str, torch.Tensor] = {}
         self.use_host_buffer = self.kv_buffer_device == "cpu"
-        if self.kv_buffer_device == "cuda":
+        if self.kv_buffer_device in ["cuda", "hpu"]:
             self.nixl_memory_type = "VRAM"
         elif self.kv_buffer_device == "cpu":
             self.nixl_memory_type = "DRAM"
@@ -751,7 +754,7 @@ class NixlConnectorWorker:
         descs = self.nixl_wrapper.get_reg_descs(caches_data,
                                                 self.nixl_memory_type)
         logger.debug("Registering descs: %s", caches_data)
-        self.nixl_wrapper.register_memory(descs)
+        self.nixl_wrapper.register_memory(descs, backends=[self.nixl_backend])
         logger.debug("Done registering descs")
         self._registered_descs.append(descs)
 
