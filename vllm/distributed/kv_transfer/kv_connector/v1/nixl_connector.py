@@ -101,6 +101,7 @@ class NixlAgentMetadata(
     block_lens: list[int]
     attn_backend_name: str
     kv_cache_layout: str
+    block_size: int
 
 
 @dataclass
@@ -982,6 +983,7 @@ class NixlConnectorWorker:
             block_lens=self.block_len_per_layer,
             attn_backend_name=self.backend_name,
             kv_cache_layout=self.kv_cache_layout,
+            block_size=self.block_size,
         )
         ready_event = threading.Event()
         self._nixl_handshake_listener_t = threading.Thread(
@@ -1072,24 +1074,23 @@ class NixlConnectorWorker:
                 "on local device KV."
             )
             self.enable_permute_local_kv = True
+            
+        # NOTE(Chendi): we want to support remote and local with different block_size.
+        # To achieve this goal, we need to make sure that 
+        # remote_block_lens * remote_block_size = local_block_lens * local_block_size
+        remote_block_size = nixl_agent_meta.block_size
+        block_size_ratio = divide(remote_block_size, self.block_size)
         if self.use_mla or is_kv_replicated:
             # With replicated KV cache, only the number of blocks can differ.
-            assert self.block_len_per_layer == nixl_agent_meta.block_lens, (
+            assert self.block_len_per_layer[0] * block_size_ratio == remote_block_len, (
                 "KV cache sizes must match between P and D when replicated"
             )
-            remote_block_size = remote_block_len // (self.slot_size_per_layer[0])
         else:
             # When MLA is not used, this is a list of the same block length
             for block_len in nixl_agent_meta.block_lens:
                 assert block_len == remote_block_len, (
                     "All remote layers must have the same block size"
                 )
-            remote_block_size = remote_block_len // (
-                self.slot_size_per_layer[0] * tp_ratio
-            )
-            if self._use_flashinfer:
-                # With flashinfer, KV are sent in the same message.
-                remote_block_size //= 2
             if tp_ratio > 1:
                 # Heterogeneous TP expects same kv_cache_layout.
                 if nixl_agent_meta.kv_cache_layout == "NHD":
@@ -1099,15 +1100,11 @@ class NixlConnectorWorker:
                 if self.device_type == "xpu":
                     raise ValueError("Heterogeneous TP is not supported on XPU")
 
-            assert remote_block_len == self.block_len_per_layer[0] * tp_ratio, (
+            assert remote_block_len == self.block_len_per_layer[0] * tp_ratio * block_size_ratio, (
                 "Remote P worker KV layer cache must be of shape [2, N, "
                 "local_kv_heads*tp_ratio, block_size, head_dim] and same dtype."
+                f"remote_block_len = {remote_block_len}, remote_block_size = {remote_block_size}, local_block_len = {self.block_len_per_layer[0]}, tp_ratio = {tp_ratio}, local_block_size = {self.block_size}."
             )
-
-        assert self.block_size == remote_block_size, (
-            "Remote P worker with different page/block size is not supported "
-            f"{self.block_size=}, {remote_block_size=}"
-        )
 
         # Create dst descs and xfer side handles. TP workers have same #blocks.
         if engine_id in self.dst_num_blocks:
@@ -1125,7 +1122,8 @@ class NixlConnectorWorker:
         assert len(nixl_agent_meta.kv_caches_base_addr) == len(self.block_len_per_layer)
         # Register all remote blocks, but only the corresponding kv heads.
         for i, base_addr in enumerate(nixl_agent_meta.kv_caches_base_addr):
-            kv_block_len = self.get_backend_aware_kv_block_len(layer_idx=i)
+            kv_block_len = self.get_backend_aware_kv_block_len(
+                layer_idx=i, block_len_per_layer=nixl_agent_meta.block_lens[i])
             rank_offset = (
                 self.tp_rank % tp_ratio * kv_block_len
                 if not (self.use_mla or is_kv_replicated)
@@ -1148,7 +1146,7 @@ class NixlConnectorWorker:
                     v_addr = addr + nixl_agent_meta.block_lens[i] // 2
                     blocks_data.append((v_addr, kv_block_len, remote_tp_rank))
 
-        logger.debug(
+        logger.info(
             "Created %s blocks for dst engine %s with remote rank %s and local rank %s",
             len(blocks_data),
             engine_id,
@@ -1207,7 +1205,7 @@ class NixlConnectorWorker:
                 "d2h",
             )
 
-    def permute_device_kv(self, block_ids: list[int]):
+    def permute_device_kv(self, block_ids: list[int], remote_block_size: int):
         """Transforms the layout of received KV cache blocks to the local format.
 
         This method corrects layout mismatches from direct memory copies by
@@ -1230,6 +1228,7 @@ class NixlConnectorWorker:
         sample_cache = list(self.device_kv_caches.values())[0][0]
         target_shape = list(sample_cache.shape)
         target_shape[0] = -1
+        target_shape[2] = remote_block_size
         src_shape = tuple(target_shape[i] for i in inv_order)
         indices = torch.tensor(block_ids, device=sample_cache.device)
 
@@ -1290,8 +1289,9 @@ class NixlConnectorWorker:
                 meta = self._recving_metadata.pop(req_id)
                 assert meta, f"{req_id} not found in recving_metadata list"
                 block_ids += meta.local_block_ids
+            remote_block_size = meta.block_size
 
-            self.permute_device_kv(block_ids)
+            self.permute_device_kv(block_ids, remote_block_size)
 
         return done_sending, done_recving
 
@@ -1553,7 +1553,7 @@ class NixlConnectorWorker:
         descs_ids = region_ids * num_blocks + block_ids
         return descs_ids.flatten()
 
-    def get_backend_aware_kv_block_len(self, layer_idx: int):
+    def get_backend_aware_kv_block_len(self, layer_idx: int, block_len_per_layer:list[int] = None):
         """
         Get the block length for one K/V element (K and V have the same size).
 
@@ -1562,11 +1562,12 @@ class NixlConnectorWorker:
         For FlashInfer, this is half the length of the whole block, as K and V
         share the same region.
         """
+        block_len_per_layer = block_len_per_layer or self.block_len_per_layer
         if self._use_flashinfer:
             # For indexing only half (either just the K or V part).
-            block_len = self.block_len_per_layer[layer_idx] // 2
+            block_len = block_len_per_layer[layer_idx] // 2
         else:
-            block_len = self.block_len_per_layer[layer_idx]
+            block_len = block_len_per_layer[layer_idx]
         return block_len
 
     def get_kv_connector_stats(self) -> Optional[KVConnectorStats]:
