@@ -102,6 +102,7 @@ class NixlAgentMetadata(
     block_lens: list[int]
     attn_backend_name: str
     kv_cache_layout: str
+    block_size: int
 
 
 @dataclass
@@ -1011,6 +1012,7 @@ class NixlConnectorWorker:
             block_lens=self.block_len_per_layer,
             attn_backend_name=self.backend_name,
             kv_cache_layout=self.kv_cache_layout,
+            block_size=self.block_size,
         )
         ready_event = threading.Event()
         self._nixl_handshake_listener_t = threading.Thread(
@@ -1112,24 +1114,23 @@ class NixlConnectorWorker:
                     "Or enable experimental feature to use HND to NHD support by "
                     "setting 'enable_permute_local_kv'=True in --kv-transfer-config."
                 )
+
+        # NOTE(Chendi): we want to support remote and local with different block_size.
+        # To achieve this goal, we need to make sure that
+        # remote_block_lens * remote_block_size = local_block_lens * local_block_size
+        remote_block_size = nixl_agent_meta.block_size
+        block_size_ratio = remote_block_size / self.block_size
         if self.use_mla or is_kv_replicated:
             # With replicated KV cache, only the number of blocks can differ.
-            assert self.block_len_per_layer == nixl_agent_meta.block_lens, (
+            assert self.block_len_per_layer[0] * block_size_ratio == remote_block_len, (
                 "KV cache sizes must match between P and D when replicated"
             )
-            remote_block_size = remote_block_len // (self.slot_size_per_layer[0])
         else:
             # When MLA is not used, this is a list of the same block length
             for block_len in nixl_agent_meta.block_lens:
                 assert block_len == remote_block_len, (
                     "All remote layers must have the same block size"
                 )
-            remote_block_size = remote_block_len // (
-                self.slot_size_per_layer[0] * tp_ratio
-            )
-            if self._use_flashinfer:
-                # With flashinfer, KV are sent in the same message.
-                remote_block_size //= 2
             if tp_ratio > 1:
                 # Heterogeneous TP expects same kv_cache_layout.
                 if nixl_agent_meta.kv_cache_layout == "NHD":
@@ -1139,7 +1140,10 @@ class NixlConnectorWorker:
                 if self.device_type == "xpu":
                     raise ValueError("Heterogeneous TP is not supported on XPU")
 
-            assert remote_block_len == self.block_len_per_layer[0] * tp_ratio, (
+            assert (
+                remote_block_len
+                == self.block_len_per_layer[0] * tp_ratio * block_size_ratio
+            ), (
                 "Remote P worker KV layer cache must be of shape [2, N, "
                 "local_kv_heads*tp_ratio, block_size, head_dim] and same dtype."
             )
