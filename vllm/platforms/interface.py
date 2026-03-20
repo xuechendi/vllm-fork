@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from vllm.pooling_params import PoolingParams
     from vllm.sampling_params import SamplingParams
     from vllm.utils.argparse_utils import FlexibleArgumentParser
+    from vllm.v1.attention.backend import AttentionBackend
     from vllm.v1.attention.selector import AttentionSelectorConfig
 else:
     FlexibleArgumentParser = object
@@ -239,6 +240,16 @@ class Platform:
     ) -> str:
         """Get the attention backend class of a device."""
         return ""
+
+    @classmethod
+    def update_attn_backend(cls, backend: "type[AttentionBackend]") -> None:
+        """
+        Update the attention backend according to platform-specific requirements.
+
+        Platforms may override this to update backend.get_supported_kernel_block_sizes
+        to match platform constraints (e.g., XPU uses block size 64).
+        """
+        pass
 
     @classmethod
     def get_supported_vit_attn_backends(cls) -> list["AttentionBackendEnum"]:

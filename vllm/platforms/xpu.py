@@ -20,6 +20,7 @@ from .interface import DeviceCapability, Platform, PlatformEnum
 
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
+    from vllm.v1.attention.backend import AttentionBackend
     from vllm.v1.attention.selector import AttentionSelectorConfig
 else:
     VllmConfig = None
@@ -86,6 +87,21 @@ class XPUPlatform(Platform):
 
         logger.info("Using Flash Attention backend.")
         return AttentionBackendEnum.FLASH_ATTN.get_path()
+
+    @classmethod
+    def update_attn_backend(cls, backend: "type[AttentionBackend]") -> None:
+        """
+        Update the attention backend's supported kernel block sizes for XPU.
+
+        XPU (V1/chunked prefill) uses block size 64. Override the backend's
+        get_supported_kernel_block_sizes to match this platform constraint.
+        """
+        if (
+            backend.get_name() == AttentionBackendEnum.FLASH_ATTN.get_name()
+            or backend.get_name() == AttentionBackendEnum.TRITON_ATTN.get_name()
+            or backend.get_name() == AttentionBackendEnum.TORCH_SDPA.get_name()
+        ):
+            backend.get_supported_kernel_block_sizes = staticmethod(lambda: [64])
 
     @classmethod
     def get_supported_vit_attn_backends(cls) -> list["AttentionBackendEnum"]:
