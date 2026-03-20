@@ -3,7 +3,7 @@
 
 import contextlib
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 
@@ -103,7 +103,16 @@ class XPUPlatform(Platform):
             AttentionBackendEnum.TORCH_SDPA.name,
         ):
             logger.info("Updated %s to use block size 64 for XPU.", backend_name)
-            backend.get_supported_kernel_block_sizes = staticmethod(lambda: [64])
+
+            from vllm.v1.attention.backend import MultipleOf
+
+            def _xpu_supported_block_sizes() -> list[int | MultipleOf]:
+                # cast: list invariance vs list[int | MultipleOf]
+                return cast(list[int | MultipleOf], [64])
+
+            backend.get_supported_kernel_block_sizes = staticmethod(  # type: ignore[method-assign]
+                _xpu_supported_block_sizes
+            )
 
     @classmethod
     def get_supported_vit_attn_backends(cls) -> list["AttentionBackendEnum"]:
