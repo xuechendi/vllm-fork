@@ -96,11 +96,13 @@ class XPUPlatform(Platform):
         XPU (V1/chunked prefill) uses block size 64. Override the backend's
         get_supported_kernel_block_sizes to match this platform constraint.
         """
-        if (
-            backend.get_name() == AttentionBackendEnum.FLASH_ATTN.get_name()
-            or backend.get_name() == AttentionBackendEnum.TRITON_ATTN.get_name()
-            or backend.get_name() == AttentionBackendEnum.TORCH_SDPA.get_name()
+        backend_name = backend.get_name()
+        if backend_name in (
+            AttentionBackendEnum.FLASH_ATTN.name,
+            AttentionBackendEnum.TRITON_ATTN.name,
+            AttentionBackendEnum.TORCH_SDPA.name,
         ):
+            logger.info("Updated %s to use block size 64 for XPU.", backend_name)
             backend.get_supported_kernel_block_sizes = staticmethod(lambda: [64])
 
     @classmethod

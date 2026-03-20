@@ -323,7 +323,11 @@ def select_common_block_size(
             continue
         if block_size_is_supported(backends, supported_size):
             return supported_size
-    raise ValueError(f"No common block size for {kv_manager_block_size}. ")
+    logger.warning(
+        "No common block size for %s. Now looking for the largest supported size.",
+        kv_manager_block_size,
+    )
+    return max(all_int_supported_sizes)
 
 
 def prepare_kernel_block_sizes(
