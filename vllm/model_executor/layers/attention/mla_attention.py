@@ -1098,6 +1098,7 @@ except ImportError:
         from vllm._xpu_ops import xpu_ops as ops
 
         flash_attn_varlen_func = ops.flash_attn_varlen_func  # type: ignore[no-redef]
+        is_vllm_fa = True
 
 
 def dynamic_per_batched_tensor_quant(
@@ -1361,6 +1362,9 @@ def use_trtllm_ragged_deepseek_prefill() -> bool:
 
     return is_deepseek_r1_mla_compatible(vllm_config)
 
+@functools.cache
+def use_triton_prefill() -> bool:
+    return MLACommonBackend.get_name() == "TRITON_MLA"
 
 @dataclass
 class MLADims:
@@ -2224,6 +2228,10 @@ class MLACommonImpl(MLAAttentionImpl[M], Generic[M]):
         self.cp_kv_cache_interleave_size: int = (
             get_current_vllm_config().parallel_config.cp_kv_cache_interleave_size
         )
+        if use_triton_prefill():
+            logger.info_once("Using Triton prefill for MLA", scope="local")
+            from vllm.v1.attention.ops.triton_flash_attn_varlen import flash_attn_varlen_triton
+            self.flash_attn_varlen_func = flash_attn_varlen_triton
 
     def _flash_attn_varlen_diff_headdims(
         self, q, k, v, return_softmax_lse=False, softmax_scale=None, **kwargs
