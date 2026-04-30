@@ -59,6 +59,7 @@ from vllm.model_executor.model_loader.weight_utils import (
 from vllm.sequence import IntermediateTensors
 from vllm.v1.attention.backend import AttentionType
 
+from .activation_shape_events import record_activation_shape
 from .adapters import as_embedding_model, as_seq_cls_model
 from .interfaces import (
     EagleModelMixin,
@@ -115,9 +116,13 @@ class LlamaMLP(nn.Module):
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
+        record_activation_shape("mlp.gate_up_proj.input", x)
         x, _ = self.gate_up_proj(x)
+        record_activation_shape("mlp.gate_up_proj.output", x)
         x = self.act_fn(x)
+        record_activation_shape("mlp.act_fn.output", x)
         x, _ = self.down_proj(x)
+        record_activation_shape("mlp.down_proj.output", x)
         return x
 
 
@@ -225,11 +230,20 @@ class LlamaAttention(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
+        record_activation_shape("attn.qkv_proj.input", hidden_states)
         qkv, _ = self.qkv_proj(hidden_states)
+        record_activation_shape("attn.qkv_proj.output", qkv)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        record_activation_shape("attn.q", q)
+        record_activation_shape("attn.k", k)
+        record_activation_shape("attn.v", v)
         q, k = self.rotary_emb(positions, q, k)
+        record_activation_shape("attn.rotary_emb.q", q)
+        record_activation_shape("attn.rotary_emb.k", k)
         attn_output = self.attn(q, k, v)
+        record_activation_shape("attn.attention.output", attn_output)
         output, _ = self.o_proj(attn_output)
+        record_activation_shape("attn.o_proj.output", output)
         return output
 
     def _init_rotary_emb(
@@ -325,10 +339,12 @@ class LlamaDecoderLayer(nn.Module):
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
+        record_activation_shape("input_layernorm.output", hidden_states)
         hidden_states = self.self_attn(positions=positions, hidden_states=hidden_states)
 
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        record_activation_shape("post_attention_layernorm.output", hidden_states)
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 

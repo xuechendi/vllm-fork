@@ -62,6 +62,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.transformers_utils.config import is_interleaved, set_default_rope_theta
 from vllm.v1.attention.backend import AttentionType
 
+from .activation_shape_events import record_activation_shape
 from .interfaces import (
     EagleModelMixin,
     SupportsEagle,
@@ -111,9 +112,13 @@ class Qwen2MLP(nn.Module):
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
+        record_activation_shape("mlp.gate_up_proj.input", x)
         gate_up, _ = self.gate_up_proj(x)
+        record_activation_shape("mlp.gate_up_proj.output", gate_up)
         x = self.act_fn(gate_up)
+        record_activation_shape("mlp.act_fn.output", x)
         x, _ = self.down_proj(x)
+        record_activation_shape("mlp.down_proj.output", x)
         return x
 
 

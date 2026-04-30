@@ -65,6 +65,7 @@ from vllm.model_executor.model_loader.weight_utils import (
 from vllm.model_executor.models.utils import sequence_parallel_chunk
 from vllm.sequence import IntermediateTensors
 
+from .activation_shape_events import record_activation_shape
 from .interfaces import (
     EagleModelMixin,
     MixtureOfExperts,
@@ -121,9 +122,13 @@ class Qwen3MoeMLP(nn.Module):
         self.expert_gate = expert_gate
 
     def forward(self, x):
+        record_activation_shape("mlp.gate_up_proj.input", x)
         gate_up, _ = self.gate_up_proj(x)
+        record_activation_shape("mlp.gate_up_proj.output", gate_up)
         out = self.act_fn(gate_up)
+        record_activation_shape("mlp.act_fn.output", out)
         out, _ = self.down_proj(out)
+        record_activation_shape("mlp.down_proj.output", out)
 
         if self.expert_gate is not None:
             out = F.sigmoid(self.expert_gate(x)[0]) * out
@@ -232,11 +237,16 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         if self.is_sequence_parallel:
             hidden_states = sequence_parallel_chunk(hidden_states)
 
+        record_activation_shape("moe.gate.input", hidden_states)
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
+        record_activation_shape("moe.router_logits", router_logits)
         shared_out, fused_out = self.experts(
             hidden_states=hidden_states, router_logits=router_logits
         )
+        if shared_out is not None:
+            record_activation_shape("moe.shared_expert.output", shared_out)
+        record_activation_shape("moe.routed_experts.output", fused_out)
         final_hidden_states = (
             shared_out + fused_out if shared_out is not None else fused_out
         )
@@ -251,6 +261,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
                 final_hidden_states
             )
 
+        record_activation_shape("moe.output", final_hidden_states)
         # return to 1d if input is 1d
         return final_hidden_states.squeeze(0) if is_input_1d else final_hidden_states
 
@@ -342,19 +353,30 @@ class Qwen3MoeAttention(nn.Module):
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
     ) -> torch.Tensor:
+        record_activation_shape("attn.qkv_proj.input", hidden_states)
         qkv, _ = self.qkv_proj(hidden_states)
+        record_activation_shape("attn.qkv_proj.output", qkv)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        record_activation_shape("attn.q", q)
+        record_activation_shape("attn.k", k)
+        record_activation_shape("attn.v", v)
         # Add qk-norm
         q_by_head = q.view(*q.shape[:-1], q.shape[-1] // self.head_dim, self.head_dim)
         q_by_head = self.q_norm(q_by_head)
         q = q_by_head.view(q.shape)
+        record_activation_shape("attn.q_norm.output", q)
 
         k_by_head = k.view(*k.shape[:-1], k.shape[-1] // self.head_dim, self.head_dim)
         k_by_head = self.k_norm(k_by_head)
         k = k_by_head.view(k.shape)
+        record_activation_shape("attn.k_norm.output", k)
         q, k = self.rotary_emb(positions, q, k)
+        record_activation_shape("attn.rotary_emb.q", q)
+        record_activation_shape("attn.rotary_emb.k", k)
         attn_output = self.attn(q, k, v)
+        record_activation_shape("attn.attention.output", attn_output)
         output, _ = self.o_proj(attn_output)
+        record_activation_shape("attn.o_proj.output", output)
         return output
 
 
@@ -422,6 +444,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
+        record_activation_shape("input_layernorm.output", hidden_states)
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
@@ -429,6 +452,7 @@ class Qwen3MoeDecoderLayer(nn.Module):
 
         # Fully Connected
         hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        record_activation_shape("post_attention_layernorm.output", hidden_states)
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 
