@@ -1,0 +1,644 @@
+INFO 04-29 21:20:23 [utils.py:233] non-default args: {'dtype': 'bfloat16', 'max_model_len': 1024, 'tensor_parallel_size': 4, 'max_num_batched_tokens': 2048, 'max_num_seqs': 16, 'quantization': 'fp8', 'enforce_eager': True, 'enable_lora': None, 'reasoning_parser_plugin': '', 'model': 'Qwen/Qwen3-30B-A3B'}
+WARNING 04-29 21:20:23 [envs.py:1749] Unknown vLLM environment variable detected: VLLM_OMNI_TARGET_DEVICE
+INFO 04-29 21:20:32 [model.py:549] Resolved architecture: Qwen3MoeForCausalLM
+INFO 04-29 21:20:32 [model.py:1678] Using max model len 1024
+INFO 04-29 21:20:33 [vllm.py:790] Asynchronous scheduling is enabled.
+WARNING 04-29 21:20:33 [vllm.py:848] Enforce eager set, disabling torch.compile and CUDAGraphs. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none
+WARNING 04-29 21:20:33 [vllm.py:859] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+INFO 04-29 21:20:33 [vllm.py:1025] Cudagraph is disabled under eager mode
+WARNING 04-29 21:20:33 [xpu.py:181] XPU Graph is not supported in the current PyTorch version, disabling cudagraph_mode.
+INFO 04-29 21:20:33 [compilation.py:290] Enabled custom fusions: norm_quant, act_quant
+(EngineCore pid=317445) INFO 04-29 21:20:41 [core.py:105] Initializing a V1 LLM engine (v0.19.0) with config: model='Qwen/Qwen3-30B-A3B', speculative_config=None, tokenizer='Qwen/Qwen3-30B-A3B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=1024, download_dir=None, load_format=auto, tensor_parallel_size=4, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=True, quantization=fp8, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=xpu, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False), seed=0, served_model_name=Qwen/Qwen3-30B-A3B, enable_prefix_caching=True, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['all'], 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_images_per_batch': 0, 'compile_sizes': [], 'compile_ranges_endpoints': [2048], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'size_asserts': False, 'alignment_asserts': False, 'scalar_asserts': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': True, 'static_all_moe_layers': []}
+(EngineCore pid=317445) WARNING 04-29 21:20:41 [multiproc_executor.py:1014] Reducing Torch parallelism from 96 threads to 1 to avoid unnecessary CPU contention. Set OMP_NUM_THREADS in the external environment to tune this value as needed.
+(EngineCore pid=317445) INFO 04-29 21:20:41 [multiproc_executor.py:134] DP group leader: node_rank=0, node_rank_within_dp=0, master_addr=127.0.0.1, mq_connect_ip=192.168.1.115 (local), world_size=4, local_world_size=4
+(Worker pid=317707) INFO 04-29 21:20:48 [parallel_state.py:1400] world_size=4 rank=0 local_rank=0 distributed_init_method=tcp://127.0.0.1:34815 backend=xccl
+(Worker pid=317710) INFO 04-29 21:20:48 [parallel_state.py:1400] world_size=4 rank=3 local_rank=3 distributed_init_method=tcp://127.0.0.1:34815 backend=xccl
+(Worker pid=317708) INFO 04-29 21:20:48 [parallel_state.py:1400] world_size=4 rank=1 local_rank=1 distributed_init_method=tcp://127.0.0.1:34815 backend=xccl
+(Worker pid=317709) INFO 04-29 21:20:48 [parallel_state.py:1400] world_size=4 rank=2 local_rank=2 distributed_init_method=tcp://127.0.0.1:34815 backend=xccl
+(Worker pid=317707) INFO 04-29 21:20:48 [parallel_state.py:1716] rank 0 in world size 4 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0, EPLB rank N/A
+2026:04:29-21:20:48:(317709) |CCL_WARN| value of CCL_ATL_TRANSPORT changed to be ofi (default:mpi)
+2026:04:29-21:20:48:(317709) |CCL_WARN| could not get local_idx/count from environment variables, trying to get them from ATL
+2026:04:29-21:20:48:(317708) |CCL_WARN| value of CCL_ATL_TRANSPORT changed to be ofi (default:mpi)
+2026:04:29-21:20:48:(317708) |CCL_WARN| could not get local_idx/count from environment variables, trying to get them from ATL
+2026:04:29-21:20:48:(317710) |CCL_WARN| value of CCL_ATL_TRANSPORT changed to be ofi (default:mpi)
+2026:04:29-21:20:48:(317710) |CCL_WARN| could not get local_idx/count from environment variables, trying to get them from ATL
+2026:04:29-21:20:48:(317707) |CCL_WARN| value of CCL_ATL_TRANSPORT changed to be ofi (default:mpi)
+2026:04:29-21:20:48:(317707) |CCL_WARN| could not get local_idx/count from environment variables, trying to get them from ATL
+2026:04:29-21:20:49:(317707) |CCL_WARN| topology recognition shows PCIe connection between devices. If this is not correct, you can disable topology recognition, with CCL_TOPO_FABRIC_VERTEX_CONNECTION_CHECK=0. This will assume XeLinks across devices
+2026:04:29-21:20:49:(317709) |CCL_WARN| topology recognition shows PCIe connection between devices. If this is not correct, you can disable topology recognition, with CCL_TOPO_FABRIC_VERTEX_CONNECTION_CHECK=0. This will assume XeLinks across devices
+2026:04:29-21:20:49:(317708) |CCL_WARN| topology recognition shows PCIe connection between devices. If this is not correct, you can disable topology recognition, with CCL_TOPO_FABRIC_VERTEX_CONNECTION_CHECK=0. This will assume XeLinks across devices
+2026:04:29-21:20:49:(317710) |CCL_WARN| topology recognition shows PCIe connection between devices. If this is not correct, you can disable topology recognition, with CCL_TOPO_FABRIC_VERTEX_CONNECTION_CHECK=0. This will assume XeLinks across devices
+(Worker_TP0 pid=317707) INFO 04-29 21:20:50 [gpu_model_runner.py:4735] Starting to load model Qwen/Qwen3-30B-A3B...
+(Worker_TP0 pid=317707) INFO 04-29 21:20:50 [__init__.py:261] Selected XPUFP8ScaledMMLinearKernel for Fp8OnlineLinearMethod
+(Worker_TP0 pid=317707) INFO 04-29 21:20:51 [xpu.py:58] Setting VLLM_KV_CACHE_LAYOUT to 'NHD' for XPU; only NHD layout is supported by XPU attention kernels.
+(Worker_TP0 pid=317707) INFO 04-29 21:20:51 [xpu.py:80] Using Flash Attention backend.
+(Worker_TP0 pid=317707) INFO 04-29 21:20:51 [flash_attn.py:596] Using FlashAttention version 2
+(Worker_TP0 pid=317707) INFO 04-29 21:20:51 [fp8.py:396] Using XPU Fp8 MoE backend out of potential backends: ['XPU', 'AITER', 'FLASHINFER_TRTLLM', 'FLASHINFER_CUTLASS', 'DEEPGEMM', 'TRITON', 'MARLIN', 'BATCHED_DEEPGEMM', 'BATCHED_TRITON'].
+(Worker_TP2 pid=317709) INFO 04-29 21:20:51 [xpu.py:58] Setting VLLM_KV_CACHE_LAYOUT to 'NHD' for XPU; only NHD layout is supported by XPU attention kernels.
+(Worker_TP3 pid=317710) INFO 04-29 21:20:51 [xpu.py:58] Setting VLLM_KV_CACHE_LAYOUT to 'NHD' for XPU; only NHD layout is supported by XPU attention kernels.
+(Worker_TP1 pid=317708) INFO 04-29 21:20:51 [xpu.py:58] Setting VLLM_KV_CACHE_LAYOUT to 'NHD' for XPU; only NHD layout is supported by XPU attention kernels.
+(Worker_TP0 pid=317707) INFO 04-29 21:30:10 [weight_utils.py:581] Time spent downloading weights for Qwen/Qwen3-30B-A3B: 558.938510 seconds
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:   0% Completed | 0/16 [00:00<?, ?it/s]
+(Worker_TP0 pid=317707) INFO 04-29 21:30:11 [fp8.py:560] Using MoEPrepareAndFinalizeNoDPEPModular
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:   6% Completed | 1/16 [00:00<00:10,  1.46it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  12% Completed | 2/16 [00:01<00:09,  1.54it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  19% Completed | 3/16 [00:02<00:08,  1.45it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  25% Completed | 4/16 [00:02<00:07,  1.55it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  31% Completed | 5/16 [00:03<00:06,  1.61it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  38% Completed | 6/16 [00:03<00:06,  1.66it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  44% Completed | 7/16 [00:04<00:05,  1.68it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  50% Completed | 8/16 [00:04<00:04,  1.64it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  56% Completed | 9/16 [00:05<00:03,  1.76it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  62% Completed | 10/16 [00:05<00:03,  1.80it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  69% Completed | 11/16 [00:06<00:02,  1.83it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  75% Completed | 12/16 [00:07<00:02,  1.78it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  81% Completed | 13/16 [00:07<00:01,  1.89it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  88% Completed | 14/16 [00:08<00:01,  1.96it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards:  94% Completed | 15/16 [00:08<00:00,  2.02it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards: 100% Completed | 16/16 [00:08<00:00,  2.50it/s]
+(Worker_TP0 pid=317707) Loading safetensors checkpoint shards: 100% Completed | 16/16 [00:08<00:00,  1.84it/s]
+(Worker_TP0 pid=317707) 
+(Worker_TP0 pid=317707) INFO 04-29 21:30:19 [default_loader.py:384] Loading weights took 8.69 seconds
+(Worker_TP0 pid=317707) INFO 04-29 21:30:20 [gpu_model_runner.py:4820] Model loading took 7.27 GiB memory and 569.088806 seconds
+sycl_arch not recognized: 21483225088
+sycl_arch not recognized: 21483225088
+sycl_arch not recognized: 21483225088
+sycl_arch not recognized: 21483225088
+(Worker_TP2 pid=317709) activation_shape:input_layernorm.output:2048x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.input:2048x2048
+(Worker_TP3 pid=317710) activation_shape:input_layernorm.output:2048x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.input:2048x2048
+(Worker_TP0 pid=317707) activation_shape:input_layernorm.output:2048x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.input:2048x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.output:2048x1280
+(Worker_TP2 pid=317709) activation_shape:attn.q:2048x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k:2048x128
+(Worker_TP2 pid=317709) activation_shape:attn.v:2048x128
+(Worker_TP2 pid=317709) activation_shape:attn.q_norm.output:2048x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k_norm.output:2048x128
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.output:2048x1280
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.q:2048x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.k:2048x128
+(Worker_TP3 pid=317710) activation_shape:attn.q:2048x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k:2048x128
+(Worker_TP3 pid=317710) activation_shape:attn.v:2048x128
+(Worker_TP2 pid=317709) activation_shape:attn.attention.output:2048x1024
+(Worker_TP3 pid=317710) activation_shape:attn.q_norm.output:2048x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k_norm.output:2048x128
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.q:2048x1024
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.k:2048x128
+(Worker_TP3 pid=317710) activation_shape:attn.attention.output:2048x1024
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.output:2048x1280
+(Worker_TP0 pid=317707) activation_shape:attn.q:2048x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k:2048x128
+(Worker_TP0 pid=317707) activation_shape:attn.v:2048x128
+(Worker_TP0 pid=317707) activation_shape:attn.q_norm.output:2048x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k_norm.output:2048x128
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.q:2048x1024
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.k:2048x128
+(Worker_TP0 pid=317707) activation_shape:attn.attention.output:2048x1024
+(Worker_TP2 pid=317709) activation_shape:attn.o_proj.output:2048x2048
+(Worker_TP2 pid=317709) activation_shape:post_attention_layernorm.output:2048x2048
+(Worker_TP2 pid=317709) activation_shape:moe.gate.input:2048x2048
+(Worker_TP3 pid=317710) activation_shape:attn.o_proj.output:2048x2048
+(Worker_TP3 pid=317710) activation_shape:post_attention_layernorm.output:2048x2048
+(Worker_TP3 pid=317710) activation_shape:moe.gate.input:2048x2048
+(Worker_TP0 pid=317707) activation_shape:attn.o_proj.output:2048x2048
+(Worker_TP0 pid=317707) activation_shape:post_attention_layernorm.output:2048x2048
+(Worker_TP0 pid=317707) activation_shape:moe.gate.input:2048x2048
+(Worker_TP2 pid=317709) activation_shape:moe.router_logits:2048x128
+(Worker_TP3 pid=317710) activation_shape:moe.router_logits:2048x128
+(Worker_TP0 pid=317707) activation_shape:moe.router_logits:2048x128
+(Worker_TP0 pid=317707) activation_shape:moe.routed_experts.output:2048x2048
+(Worker_TP2 pid=317709) activation_shape:moe.routed_experts.output:2048x2048
+(Worker_TP0 pid=317707) activation_shape:moe.output:2048x2048
+(Worker_TP2 pid=317709) activation_shape:moe.output:2048x2048
+(Worker_TP3 pid=317710) activation_shape:moe.routed_experts.output:2048x2048
+(Worker_TP3 pid=317710) activation_shape:moe.output:2048x2048
+(Worker_TP1 pid=317708) activation_shape:input_layernorm.output:2048x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.input:2048x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.output:2048x1280
+(Worker_TP1 pid=317708) activation_shape:attn.q:2048x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k:2048x128
+(Worker_TP1 pid=317708) activation_shape:attn.v:2048x128
+(Worker_TP1 pid=317708) activation_shape:attn.q_norm.output:2048x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k_norm.output:2048x128
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.q:2048x1024
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.k:2048x128
+(Worker_TP1 pid=317708) activation_shape:attn.attention.output:2048x1024
+(Worker_TP1 pid=317708) activation_shape:attn.o_proj.output:2048x2048
+(Worker_TP1 pid=317708) activation_shape:post_attention_layernorm.output:2048x2048
+(Worker_TP1 pid=317708) activation_shape:moe.gate.input:2048x2048
+(Worker_TP1 pid=317708) activation_shape:moe.router_logits:2048x128
+(Worker_TP1 pid=317708) activation_shape:moe.routed_experts.output:2048x2048
+(Worker_TP1 pid=317708) activation_shape:moe.output:2048x2048
+(Worker_TP0 pid=317707) INFO 04-29 21:30:56 [gpu_worker.py:436] Available KV cache memory: 19.31 GiB
+(EngineCore pid=317445) INFO 04-29 21:30:56 [kv_cache_utils.py:1319] GPU KV cache size: 843,072 tokens
+(EngineCore pid=317445) INFO 04-29 21:30:56 [kv_cache_utils.py:1324] Maximum concurrency for 1,024 tokens per request: 823.31x
+(Worker_TP0 pid=317707) INFO 04-29 21:30:56 [utils.py:59] `_KV_CACHE_LAYOUT_OVERRIDE` variable detected. Setting KV cache layout to NHD.
+(Worker_TP2 pid=317709) activation_shape:input_layernorm.output:16x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.input:16x2048
+(Worker_TP3 pid=317710) activation_shape:input_layernorm.output:16x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.input:16x2048
+(Worker_TP0 pid=317707) activation_shape:input_layernorm.output:16x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.input:16x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.output:16x1280
+(Worker_TP3 pid=317710) activation_shape:attn.q:16x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k:16x128
+(Worker_TP3 pid=317710) activation_shape:attn.v:16x128
+(Worker_TP3 pid=317710) activation_shape:attn.q_norm.output:16x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k_norm.output:16x128
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.q:16x1024
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.k:16x128
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.output:16x1280
+(Worker_TP2 pid=317709) activation_shape:attn.q:16x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k:16x128
+(Worker_TP2 pid=317709) activation_shape:attn.v:16x128
+(Worker_TP2 pid=317709) activation_shape:attn.q_norm.output:16x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k_norm.output:16x128
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.q:16x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.k:16x128
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.output:16x1280
+(Worker_TP0 pid=317707) activation_shape:attn.q:16x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k:16x128
+(Worker_TP0 pid=317707) activation_shape:attn.v:16x128
+(Worker_TP0 pid=317707) activation_shape:attn.q_norm.output:16x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k_norm.output:16x128
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.q:16x1024
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.k:16x128
+(Worker_TP3 pid=317710) activation_shape:attn.attention.output:16x1024
+(Worker_TP0 pid=317707) activation_shape:attn.attention.output:16x1024
+(Worker_TP2 pid=317709) activation_shape:attn.attention.output:16x1024
+(Worker_TP3 pid=317710) activation_shape:attn.o_proj.output:16x2048
+(Worker_TP3 pid=317710) activation_shape:post_attention_layernorm.output:16x2048
+(Worker_TP3 pid=317710) activation_shape:moe.gate.input:16x2048
+(Worker_TP3 pid=317710) activation_shape:moe.router_logits:16x128
+(Worker_TP3 pid=317710) activation_shape:moe.routed_experts.output:16x2048
+(Worker_TP3 pid=317710) activation_shape:moe.output:16x2048
+(Worker_TP0 pid=317707) activation_shape:attn.o_proj.output:16x2048
+(Worker_TP0 pid=317707) activation_shape:post_attention_layernorm.output:16x2048
+(Worker_TP0 pid=317707) activation_shape:moe.gate.input:16x2048
+(Worker_TP0 pid=317707) activation_shape:moe.router_logits:16x128
+(Worker_TP0 pid=317707) activation_shape:moe.routed_experts.output:16x2048
+(Worker_TP0 pid=317707) activation_shape:moe.output:16x2048
+(Worker_TP2 pid=317709) activation_shape:attn.o_proj.output:16x2048
+(Worker_TP2 pid=317709) activation_shape:post_attention_layernorm.output:16x2048
+(Worker_TP2 pid=317709) activation_shape:moe.gate.input:16x2048
+(Worker_TP2 pid=317709) activation_shape:moe.router_logits:16x128
+(Worker_TP2 pid=317709) activation_shape:moe.routed_experts.output:16x2048
+(Worker_TP2 pid=317709) activation_shape:moe.output:16x2048
+(Worker_TP1 pid=317708) activation_shape:input_layernorm.output:16x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.input:16x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.output:16x1280
+(Worker_TP1 pid=317708) activation_shape:attn.q:16x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k:16x128
+(Worker_TP1 pid=317708) activation_shape:attn.v:16x128
+(Worker_TP1 pid=317708) activation_shape:attn.q_norm.output:16x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k_norm.output:16x128
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.q:16x1024
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.k:16x128
+(Worker_TP1 pid=317708) activation_shape:attn.attention.output:16x1024
+(Worker_TP1 pid=317708) activation_shape:attn.o_proj.output:16x2048
+(Worker_TP1 pid=317708) activation_shape:post_attention_layernorm.output:16x2048
+(Worker_TP1 pid=317708) activation_shape:moe.gate.input:16x2048
+(Worker_TP1 pid=317708) activation_shape:moe.router_logits:16x128
+(Worker_TP1 pid=317708) activation_shape:moe.routed_experts.output:16x2048
+(Worker_TP1 pid=317708) activation_shape:moe.output:16x2048
+(EngineCore pid=317445) INFO 04-29 21:30:57 [core.py:283] init engine (profile, create kv cache, warmup model) took 35.76 seconds
+(EngineCore pid=317445) INFO 04-29 21:30:58 [vllm.py:790] Asynchronous scheduling is enabled.
+(EngineCore pid=317445) WARNING 04-29 21:30:58 [vllm.py:848] Enforce eager set, disabling torch.compile and CUDAGraphs. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none
+(EngineCore pid=317445) WARNING 04-29 21:30:58 [vllm.py:859] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(EngineCore pid=317445) INFO 04-29 21:30:58 [vllm.py:1025] Cudagraph is disabled under eager mode
+(EngineCore pid=317445) WARNING 04-29 21:30:58 [xpu.py:181] XPU Graph is not supported in the current PyTorch version, disabling cudagraph_mode.
+(EngineCore pid=317445) INFO 04-29 21:30:58 [compilation.py:290] Enabled custom fusions: norm_quant, act_quant
+WARNING 04-29 21:30:58 [model.py:1435] Default vLLM sampling parameters have been overridden by the model's `generation_config.json`: `{'temperature': 0.6, 'top_k': 20, 'top_p': 0.95}`. If this is not intended, please relaunch vLLM instance with `--generation-config vllm`.
+Rendering prompts:   0%|          | 0/4 [00:00<?, ?it/s]Rendering prompts: 100%|██████████| 4/4 [00:00<00:00, 108.94it/s]
+Processed prompts:   0%|          | 0/4 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s](Worker_TP0 pid=317707) activation_shape:input_layernorm.output:5x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.input:5x2048
+(Worker_TP3 pid=317710) activation_shape:input_layernorm.output:5x2048
+(Worker_TP2 pid=317709) activation_shape:input_layernorm.output:5x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.input:5x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.input:5x2048
+(Worker_TP1 pid=317708) activation_shape:input_layernorm.output:5x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.input:5x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.output:5x1280
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.output:5x1280
+(Worker_TP0 pid=317707) activation_shape:attn.q:5x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k:5x128
+(Worker_TP3 pid=317710) activation_shape:attn.q:5x1024
+(Worker_TP0 pid=317707) activation_shape:attn.v:5x128
+(Worker_TP3 pid=317710) activation_shape:attn.k:5x128
+(Worker_TP3 pid=317710) activation_shape:attn.v:5x128
+(Worker_TP0 pid=317707) activation_shape:attn.q_norm.output:5x1024
+(Worker_TP3 pid=317710) activation_shape:attn.q_norm.output:5x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k_norm.output:5x128
+(Worker_TP3 pid=317710) activation_shape:attn.k_norm.output:5x128
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.q:5x1024
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.k:5x128
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.q:5x1024
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.k:5x128
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.output:5x1280
+(Worker_TP2 pid=317709) activation_shape:attn.q:5x1024
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.output:5x1280
+(Worker_TP2 pid=317709) activation_shape:attn.k:5x128
+(Worker_TP2 pid=317709) activation_shape:attn.v:5x128
+(Worker_TP1 pid=317708) activation_shape:attn.q:5x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k:5x128
+(Worker_TP2 pid=317709) activation_shape:attn.q_norm.output:5x1024
+(Worker_TP1 pid=317708) activation_shape:attn.v:5x128
+(Worker_TP0 pid=317707) activation_shape:attn.attention.output:5x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k_norm.output:5x128
+(Worker_TP3 pid=317710) activation_shape:attn.attention.output:5x1024
+(Worker_TP1 pid=317708) activation_shape:attn.q_norm.output:5x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.q:5x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.k:5x128
+(Worker_TP1 pid=317708) activation_shape:attn.k_norm.output:5x128
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.q:5x1024
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.k:5x128
+(Worker_TP0 pid=317707) activation_shape:attn.o_proj.output:5x2048
+(Worker_TP3 pid=317710) activation_shape:attn.o_proj.output:5x2048
+(Worker_TP0 pid=317707) activation_shape:post_attention_layernorm.output:5x2048
+(Worker_TP0 pid=317707) activation_shape:moe.gate.input:5x2048
+(Worker_TP3 pid=317710) activation_shape:post_attention_layernorm.output:5x2048
+(Worker_TP3 pid=317710) activation_shape:moe.gate.input:5x2048
+(Worker_TP0 pid=317707) activation_shape:moe.router_logits:5x128
+(Worker_TP3 pid=317710) activation_shape:moe.router_logits:5x128
+(Worker_TP0 pid=317707) activation_shape:moe.routed_experts.output:5x2048
+(Worker_TP0 pid=317707) activation_shape:moe.output:5x2048
+(Worker_TP3 pid=317710) activation_shape:moe.routed_experts.output:5x2048
+(Worker_TP2 pid=317709) activation_shape:attn.attention.output:5x1024
+(Worker_TP3 pid=317710) activation_shape:moe.output:5x2048
+(Worker_TP1 pid=317708) activation_shape:attn.attention.output:5x1024
+(Worker_TP2 pid=317709) activation_shape:attn.o_proj.output:5x2048
+(Worker_TP2 pid=317709) activation_shape:post_attention_layernorm.output:5x2048
+(Worker_TP2 pid=317709) activation_shape:moe.gate.input:5x2048
+(Worker_TP1 pid=317708) activation_shape:attn.o_proj.output:5x2048
+(Worker_TP1 pid=317708) activation_shape:post_attention_layernorm.output:5x2048
+(Worker_TP1 pid=317708) activation_shape:moe.gate.input:5x2048
+(Worker_TP2 pid=317709) activation_shape:moe.router_logits:5x128
+(Worker_TP1 pid=317708) activation_shape:moe.router_logits:5x128
+(Worker_TP2 pid=317709) activation_shape:moe.routed_experts.output:5x2048
+(Worker_TP2 pid=317709) activation_shape:moe.output:5x2048
+(Worker_TP1 pid=317708) activation_shape:moe.routed_experts.output:5x2048
+(Worker_TP1 pid=317708) activation_shape:moe.output:5x2048
+(Worker_TP3 pid=317710) activation_shape:input_layernorm.output:8x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.input:8x2048
+(Worker_TP0 pid=317707) activation_shape:input_layernorm.output:8x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.input:8x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.output:8x1280
+(Worker_TP3 pid=317710) activation_shape:attn.q:8x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k:8x128
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.output:8x1280
+(Worker_TP3 pid=317710) activation_shape:attn.v:8x128
+(Worker_TP0 pid=317707) activation_shape:attn.q:8x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k:8x128
+(Worker_TP3 pid=317710) activation_shape:attn.q_norm.output:8x1024
+(Worker_TP0 pid=317707) activation_shape:attn.v:8x128
+(Worker_TP3 pid=317710) activation_shape:attn.k_norm.output:8x128
+(Worker_TP0 pid=317707) activation_shape:attn.q_norm.output:8x1024
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.q:8x1024
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.k:8x128
+(Worker_TP0 pid=317707) activation_shape:attn.k_norm.output:8x128
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.q:8x1024
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.k:8x128
+(Worker_TP3 pid=317710) activation_shape:attn.attention.output:8x1024
+(Worker_TP0 pid=317707) activation_shape:attn.attention.output:8x1024
+(Worker_TP3 pid=317710) activation_shape:attn.o_proj.output:8x2048
+(Worker_TP0 pid=317707) activation_shape:attn.o_proj.output:8x2048
+(Worker_TP3 pid=317710) activation_shape:post_attention_layernorm.output:8x2048
+(Worker_TP3 pid=317710) activation_shape:moe.gate.input:8x2048
+(Worker_TP0 pid=317707) activation_shape:post_attention_layernorm.output:8x2048
+(Worker_TP0 pid=317707) activation_shape:moe.gate.input:8x2048
+(Worker_TP3 pid=317710) activation_shape:moe.router_logits:8x128
+(Worker_TP0 pid=317707) activation_shape:moe.router_logits:8x128
+(Worker_TP3 pid=317710) activation_shape:moe.routed_experts.output:8x2048
+(Worker_TP0 pid=317707) activation_shape:moe.routed_experts.output:8x2048
+(Worker_TP3 pid=317710) activation_shape:moe.output:8x2048
+(Worker_TP0 pid=317707) activation_shape:moe.output:8x2048
+(Worker_TP2 pid=317709) activation_shape:input_layernorm.output:8x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.input:8x2048
+(Worker_TP1 pid=317708) activation_shape:input_layernorm.output:8x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.input:8x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.output:8x1280
+(Worker_TP2 pid=317709) activation_shape:attn.q:8x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k:8x128
+(Worker_TP2 pid=317709) activation_shape:attn.v:8x128
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.output:8x1280
+(Worker_TP2 pid=317709) activation_shape:attn.q_norm.output:8x1024
+(Worker_TP1 pid=317708) activation_shape:attn.q:8x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k_norm.output:8x128
+(Worker_TP1 pid=317708) activation_shape:attn.k:8x128
+(Worker_TP1 pid=317708) activation_shape:attn.v:8x128
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.q:8x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.k:8x128
+(Worker_TP1 pid=317708) activation_shape:attn.q_norm.output:8x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k_norm.output:8x128
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.q:8x1024
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.k:8x128
+(Worker_TP2 pid=317709) activation_shape:attn.attention.output:8x1024
+(Worker_TP1 pid=317708) activation_shape:attn.attention.output:8x1024
+(Worker_TP2 pid=317709) activation_shape:attn.o_proj.output:8x2048
+(Worker_TP2 pid=317709) activation_shape:post_attention_layernorm.output:8x2048
+(Worker_TP2 pid=317709) activation_shape:moe.gate.input:8x2048
+(Worker_TP1 pid=317708) activation_shape:attn.o_proj.output:8x2048
+(Worker_TP1 pid=317708) activation_shape:post_attention_layernorm.output:8x2048
+(Worker_TP1 pid=317708) activation_shape:moe.gate.input:8x2048
+(Worker_TP2 pid=317709) activation_shape:moe.router_logits:8x128
+(Worker_TP1 pid=317708) activation_shape:moe.router_logits:8x128
+(Worker_TP2 pid=317709) activation_shape:moe.routed_experts.output:8x2048
+(Worker_TP2 pid=317709) activation_shape:moe.output:8x2048
+(Worker_TP1 pid=317708) activation_shape:moe.routed_experts.output:8x2048
+(Worker_TP1 pid=317708) activation_shape:moe.output:8x2048
+(Worker_TP3 pid=317710) activation_shape:input_layernorm.output:12x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.input:12x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.output:12x1280
+(Worker_TP3 pid=317710) activation_shape:attn.q:12x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k:12x128
+(Worker_TP3 pid=317710) activation_shape:attn.v:12x128
+(Worker_TP3 pid=317710) activation_shape:attn.q_norm.output:12x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k_norm.output:12x128
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.q:12x1024
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.k:12x128
+(Worker_TP3 pid=317710) activation_shape:attn.attention.output:12x1024
+(Worker_TP3 pid=317710) activation_shape:attn.o_proj.output:12x2048
+(Worker_TP3 pid=317710) activation_shape:post_attention_layernorm.output:12x2048
+(Worker_TP3 pid=317710) activation_shape:moe.gate.input:12x2048
+(Worker_TP0 pid=317707) activation_shape:input_layernorm.output:12x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.input:12x2048
+(Worker_TP3 pid=317710) activation_shape:moe.router_logits:12x128
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.output:12x1280
+(Worker_TP0 pid=317707) activation_shape:attn.q:12x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k:12x128
+(Worker_TP0 pid=317707) activation_shape:attn.v:12x128
+(Worker_TP0 pid=317707) activation_shape:attn.q_norm.output:12x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k_norm.output:12x128
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.q:12x1024
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.k:12x128
+(Worker_TP3 pid=317710) activation_shape:moe.routed_experts.output:12x2048
+(Worker_TP0 pid=317707) activation_shape:attn.attention.output:12x1024
+(Worker_TP3 pid=317710) activation_shape:moe.output:12x2048
+(Worker_TP0 pid=317707) activation_shape:attn.o_proj.output:12x2048
+(Worker_TP0 pid=317707) activation_shape:post_attention_layernorm.output:12x2048
+(Worker_TP0 pid=317707) activation_shape:moe.gate.input:12x2048
+(Worker_TP0 pid=317707) activation_shape:moe.router_logits:12x128
+(Worker_TP0 pid=317707) activation_shape:moe.routed_experts.output:12x2048
+(Worker_TP0 pid=317707) activation_shape:moe.output:12x2048
+(Worker_TP1 pid=317708) activation_shape:input_layernorm.output:12x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.input:12x2048
+(Worker_TP2 pid=317709) activation_shape:input_layernorm.output:12x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.input:12x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.output:12x1280
+(Worker_TP1 pid=317708) activation_shape:attn.q:12x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k:12x128
+(Worker_TP1 pid=317708) activation_shape:attn.v:12x128
+(Worker_TP1 pid=317708) activation_shape:attn.q_norm.output:12x1024
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.output:12x1280
+(Worker_TP1 pid=317708) activation_shape:attn.k_norm.output:12x128
+(Worker_TP2 pid=317709) activation_shape:attn.q:12x1024
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.q:12x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k:12x128
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.k:12x128
+(Worker_TP2 pid=317709) activation_shape:attn.v:12x128
+(Worker_TP2 pid=317709) activation_shape:attn.q_norm.output:12x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k_norm.output:12x128
+(Worker_TP1 pid=317708) activation_shape:attn.attention.output:12x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.q:12x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.k:12x128
+(Worker_TP2 pid=317709) activation_shape:attn.attention.output:12x1024
+(Worker_TP1 pid=317708) activation_shape:attn.o_proj.output:12x2048
+(Worker_TP1 pid=317708) activation_shape:post_attention_layernorm.output:12x2048
+(Worker_TP1 pid=317708) activation_shape:moe.gate.input:12x2048
+(Worker_TP2 pid=317709) activation_shape:attn.o_proj.output:12x2048
+(Worker_TP2 pid=317709) activation_shape:post_attention_layernorm.output:12x2048
+(Worker_TP1 pid=317708) activation_shape:moe.router_logits:12x128
+(Worker_TP2 pid=317709) activation_shape:moe.gate.input:12x2048
+(Worker_TP2 pid=317709) activation_shape:moe.router_logits:12x128
+(Worker_TP1 pid=317708) activation_shape:moe.routed_experts.output:12x2048
+(Worker_TP1 pid=317708) activation_shape:moe.output:12x2048
+(Worker_TP2 pid=317709) activation_shape:moe.routed_experts.output:12x2048
+(Worker_TP2 pid=317709) activation_shape:moe.output:12x2048
+(Worker_TP3 pid=317710) activation_shape:input_layernorm.output:4x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.input:4x2048
+(Worker_TP0 pid=317707) activation_shape:input_layernorm.output:4x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.input:4x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.output:4x1280
+(Worker_TP3 pid=317710) activation_shape:attn.q:4x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k:4x128
+(Worker_TP3 pid=317710) activation_shape:attn.v:4x128
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.output:4x1280
+(Worker_TP3 pid=317710) activation_shape:attn.q_norm.output:4x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k_norm.output:4x128
+(Worker_TP0 pid=317707) activation_shape:attn.q:4x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k:4x128
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.q:4x1024
+(Worker_TP0 pid=317707) activation_shape:attn.v:4x128
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.k:4x128
+(Worker_TP0 pid=317707) activation_shape:attn.q_norm.output:4x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k_norm.output:4x128
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.q:4x1024
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.k:4x128
+(Worker_TP3 pid=317710) activation_shape:attn.attention.output:4x1024
+(Worker_TP0 pid=317707) activation_shape:attn.attention.output:4x1024
+(Worker_TP3 pid=317710) activation_shape:attn.o_proj.output:4x2048
+(Worker_TP3 pid=317710) activation_shape:post_attention_layernorm.output:4x2048
+(Worker_TP3 pid=317710) activation_shape:moe.gate.input:4x2048
+(Worker_TP3 pid=317710) activation_shape:moe.router_logits:4x128
+(Worker_TP0 pid=317707) activation_shape:attn.o_proj.output:4x2048
+(Worker_TP0 pid=317707) activation_shape:post_attention_layernorm.output:4x2048
+(Worker_TP0 pid=317707) activation_shape:moe.gate.input:4x2048
+(Worker_TP0 pid=317707) activation_shape:moe.router_logits:4x128
+(Worker_TP3 pid=317710) activation_shape:moe.routed_experts.output:4x2048
+(Worker_TP3 pid=317710) activation_shape:moe.output:4x2048
+(Worker_TP0 pid=317707) activation_shape:moe.routed_experts.output:4x2048
+(Worker_TP0 pid=317707) activation_shape:moe.output:4x2048
+(Worker_TP2 pid=317709) activation_shape:input_layernorm.output:4x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.input:4x2048
+(Worker_TP1 pid=317708) activation_shape:input_layernorm.output:4x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.input:4x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.output:4x1280
+(Worker_TP2 pid=317709) activation_shape:attn.q:4x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k:4x128
+(Worker_TP2 pid=317709) activation_shape:attn.v:4x128
+(Worker_TP2 pid=317709) activation_shape:attn.q_norm.output:4x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k_norm.output:4x128
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.q:4x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.k:4x128
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.output:4x1280
+(Worker_TP1 pid=317708) activation_shape:attn.q:4x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k:4x128
+(Worker_TP1 pid=317708) activation_shape:attn.v:4x128
+(Worker_TP1 pid=317708) activation_shape:attn.q_norm.output:4x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k_norm.output:4x128
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.q:4x1024
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.k:4x128
+(Worker_TP2 pid=317709) activation_shape:attn.attention.output:4x1024
+(Worker_TP2 pid=317709) activation_shape:attn.o_proj.output:4x2048
+(Worker_TP2 pid=317709) activation_shape:post_attention_layernorm.output:4x2048
+(Worker_TP2 pid=317709) activation_shape:moe.gate.input:4x2048
+(Worker_TP2 pid=317709) activation_shape:moe.router_logits:4x128
+(Worker_TP2 pid=317709) activation_shape:moe.routed_experts.output:4x2048
+(Worker_TP2 pid=317709) activation_shape:moe.output:4x2048
+(Worker_TP1 pid=317708) activation_shape:attn.attention.output:4x1024
+(Worker_TP1 pid=317708) activation_shape:attn.o_proj.output:4x2048
+(Worker_TP1 pid=317708) activation_shape:post_attention_layernorm.output:4x2048
+(Worker_TP1 pid=317708) activation_shape:moe.gate.input:4x2048
+(Worker_TP1 pid=317708) activation_shape:moe.router_logits:4x128
+(Worker_TP1 pid=317708) activation_shape:moe.routed_experts.output:4x2048
+(Worker_TP1 pid=317708) activation_shape:moe.output:4x2048
+(Worker_TP2 pid=317709) activation_shape:input_layernorm.output:3x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.input:3x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.output:3x1280
+(Worker_TP2 pid=317709) activation_shape:attn.q:3x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k:3x128
+(Worker_TP2 pid=317709) activation_shape:attn.v:3x128
+(Worker_TP2 pid=317709) activation_shape:attn.q_norm.output:3x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k_norm.output:3x128
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.q:3x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.k:3x128
+(Worker_TP2 pid=317709) activation_shape:attn.attention.output:3x1024
+(Worker_TP2 pid=317709) activation_shape:attn.o_proj.output:3x2048
+(Worker_TP2 pid=317709) activation_shape:post_attention_layernorm.output:3x2048
+(Worker_TP2 pid=317709) activation_shape:moe.gate.input:3x2048
+(Worker_TP2 pid=317709) activation_shape:moe.router_logits:3x128
+(Worker_TP2 pid=317709) activation_shape:moe.routed_experts.output:3x2048
+(Worker_TP2 pid=317709) activation_shape:moe.output:3x2048
+(Worker_TP0 pid=317707) activation_shape:input_layernorm.output:3x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.input:3x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.output:3x1280
+(Worker_TP0 pid=317707) activation_shape:attn.q:3x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k:3x128
+(Worker_TP0 pid=317707) activation_shape:attn.v:3x128
+(Worker_TP0 pid=317707) activation_shape:attn.q_norm.output:3x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k_norm.output:3x128
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.q:3x1024
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.k:3x128
+(Worker_TP0 pid=317707) activation_shape:attn.attention.output:3x1024
+(Worker_TP0 pid=317707) activation_shape:attn.o_proj.output:3x2048
+(Worker_TP0 pid=317707) activation_shape:post_attention_layernorm.output:3x2048
+(Worker_TP0 pid=317707) activation_shape:moe.gate.input:3x2048
+(Worker_TP0 pid=317707) activation_shape:moe.router_logits:3x128
+(Worker_TP0 pid=317707) activation_shape:moe.routed_experts.output:3x2048
+(Worker_TP0 pid=317707) activation_shape:moe.output:3x2048
+(Worker_TP3 pid=317710) activation_shape:input_layernorm.output:3x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.input:3x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.output:3x1280
+(Worker_TP3 pid=317710) activation_shape:attn.q:3x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k:3x128
+(Worker_TP3 pid=317710) activation_shape:attn.v:3x128
+(Worker_TP3 pid=317710) activation_shape:attn.q_norm.output:3x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k_norm.output:3x128
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.q:3x1024
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.k:3x128
+(Worker_TP3 pid=317710) activation_shape:attn.attention.output:3x1024
+(Worker_TP3 pid=317710) activation_shape:attn.o_proj.output:3x2048
+(Worker_TP3 pid=317710) activation_shape:post_attention_layernorm.output:3x2048
+(Worker_TP3 pid=317710) activation_shape:moe.gate.input:3x2048
+(Worker_TP3 pid=317710) activation_shape:moe.router_logits:3x128
+(Worker_TP3 pid=317710) activation_shape:moe.routed_experts.output:3x2048
+(Worker_TP3 pid=317710) activation_shape:moe.output:3x2048
+Processed prompts:  25%|██▌       | 1/4 [00:02<00:06,  2.33s/it, est. speed input: 2.15 toks/s, output: 13.74 toks/s](Worker_TP2 pid=317709) activation_shape:input_layernorm.output:2x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.input:2x2048
+(Worker_TP2 pid=317709) activation_shape:attn.qkv_proj.output:2x1280
+(Worker_TP2 pid=317709) activation_shape:attn.q:2x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k:2x128
+(Worker_TP2 pid=317709) activation_shape:attn.v:2x128
+(Worker_TP2 pid=317709) activation_shape:attn.q_norm.output:2x1024
+(Worker_TP2 pid=317709) activation_shape:attn.k_norm.output:2x128
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.q:2x1024
+(Worker_TP2 pid=317709) activation_shape:attn.rotary_emb.k:2x128
+(Worker_TP2 pid=317709) activation_shape:attn.attention.output:2x1024
+(Worker_TP2 pid=317709) activation_shape:attn.o_proj.output:2x2048
+(Worker_TP2 pid=317709) activation_shape:post_attention_layernorm.output:2x2048
+(Worker_TP2 pid=317709) activation_shape:moe.gate.input:2x2048
+(Worker_TP2 pid=317709) activation_shape:moe.router_logits:2x128
+(Worker_TP2 pid=317709) activation_shape:moe.routed_experts.output:2x2048
+(Worker_TP2 pid=317709) activation_shape:moe.output:2x2048
+(Worker_TP0 pid=317707) activation_shape:input_layernorm.output:2x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.input:2x2048
+(Worker_TP0 pid=317707) activation_shape:attn.qkv_proj.output:2x1280
+(Worker_TP0 pid=317707) activation_shape:attn.q:2x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k:2x128
+(Worker_TP0 pid=317707) activation_shape:attn.v:2x128
+(Worker_TP0 pid=317707) activation_shape:attn.q_norm.output:2x1024
+(Worker_TP0 pid=317707) activation_shape:attn.k_norm.output:2x128
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.q:2x1024
+(Worker_TP0 pid=317707) activation_shape:attn.rotary_emb.k:2x128
+(Worker_TP0 pid=317707) activation_shape:attn.attention.output:2x1024
+(Worker_TP0 pid=317707) activation_shape:attn.o_proj.output:2x2048
+(Worker_TP0 pid=317707) activation_shape:post_attention_layernorm.output:2x2048
+(Worker_TP0 pid=317707) activation_shape:moe.gate.input:2x2048
+(Worker_TP0 pid=317707) activation_shape:moe.router_logits:2x128
+(Worker_TP0 pid=317707) activation_shape:moe.routed_experts.output:2x2048
+(Worker_TP0 pid=317707) activation_shape:moe.output:2x2048
+(Worker_TP3 pid=317710) activation_shape:input_layernorm.output:2x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.input:2x2048
+(Worker_TP3 pid=317710) activation_shape:attn.qkv_proj.output:2x1280
+(Worker_TP3 pid=317710) activation_shape:attn.q:2x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k:2x128
+(Worker_TP3 pid=317710) activation_shape:attn.v:2x128
+(Worker_TP3 pid=317710) activation_shape:attn.q_norm.output:2x1024
+(Worker_TP3 pid=317710) activation_shape:attn.k_norm.output:2x128
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.q:2x1024
+(Worker_TP3 pid=317710) activation_shape:attn.rotary_emb.k:2x128
+(Worker_TP3 pid=317710) activation_shape:attn.attention.output:2x1024
+(Worker_TP3 pid=317710) activation_shape:attn.o_proj.output:2x2048
+(Worker_TP3 pid=317710) activation_shape:post_attention_layernorm.output:2x2048
+(Worker_TP3 pid=317710) activation_shape:moe.gate.input:2x2048
+(Worker_TP3 pid=317710) activation_shape:moe.router_logits:2x128
+(Worker_TP3 pid=317710) activation_shape:moe.routed_experts.output:2x2048
+(Worker_TP3 pid=317710) activation_shape:moe.output:2x2048
+(Worker_TP1 pid=317708) activation_shape:input_layernorm.output:3x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.input:3x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.output:3x1280
+(Worker_TP1 pid=317708) activation_shape:attn.q:3x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k:3x128
+(Worker_TP1 pid=317708) activation_shape:attn.v:3x128
+(Worker_TP1 pid=317708) activation_shape:attn.q_norm.output:3x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k_norm.output:3x128
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.q:3x1024
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.k:3x128
+(Worker_TP1 pid=317708) activation_shape:attn.attention.output:3x1024
+(Worker_TP1 pid=317708) activation_shape:attn.o_proj.output:3x2048
+(Worker_TP1 pid=317708) activation_shape:post_attention_layernorm.output:3x2048
+(Worker_TP1 pid=317708) activation_shape:moe.gate.input:3x2048
+(Worker_TP1 pid=317708) activation_shape:moe.router_logits:3x128
+(Worker_TP1 pid=317708) activation_shape:moe.routed_experts.output:3x2048
+(Worker_TP1 pid=317708) activation_shape:moe.output:3x2048
+(Worker_TP1 pid=317708) activation_shape:input_layernorm.output:2x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.input:2x2048
+(Worker_TP1 pid=317708) activation_shape:attn.qkv_proj.output:2x1280
+(Worker_TP1 pid=317708) activation_shape:attn.q:2x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k:2x128
+(Worker_TP1 pid=317708) activation_shape:attn.v:2x128
+(Worker_TP1 pid=317708) activation_shape:attn.q_norm.output:2x1024
+(Worker_TP1 pid=317708) activation_shape:attn.k_norm.output:2x128
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.q:2x1024
+(Worker_TP1 pid=317708) activation_shape:attn.rotary_emb.k:2x128
+(Worker_TP1 pid=317708) activation_shape:attn.attention.output:2x1024
+(Worker_TP1 pid=317708) activation_shape:attn.o_proj.output:2x2048
+(Worker_TP1 pid=317708) activation_shape:post_attention_layernorm.output:2x2048
+(Worker_TP1 pid=317708) activation_shape:moe.gate.input:2x2048
+(Worker_TP1 pid=317708) activation_shape:moe.router_logits:2x128
+(Worker_TP1 pid=317708) activation_shape:moe.routed_experts.output:2x2048
+(Worker_TP1 pid=317708) activation_shape:moe.output:2x2048
+Processed prompts:  75%|███████▌  | 3/4 [00:02<00:00,  1.50it/s, est. speed input: 6.81 toks/s, output: 38.45 toks/s]Processed prompts: 100%|██████████| 4/4 [00:02<00:00,  1.50it/s, est. speed input: 8.81 toks/s, output: 51.26 toks/s]Processed prompts: 100%|██████████| 4/4 [00:02<00:00,  1.60it/s, est. speed input: 8.81 toks/s, output: 51.26 toks/s]
+(EngineCore pid=317445) INFO 04-29 21:31:01 [core.py:1210] Shutdown initiated (timeout=0)
+(EngineCore pid=317445) INFO 04-29 21:31:01 [core.py:1233] Shutdown complete
+(Worker_TP0 pid=317707) INFO 04-29 21:31:01 [multiproc_executor.py:764] Parent process exited, terminating worker queues
+(Worker_TP1 pid=317708) INFO 04-29 21:31:01 [multiproc_executor.py:859] WorkerProc shutting down.
+(Worker_TP0 pid=317707) INFO 04-29 21:31:01 [multiproc_executor.py:859] WorkerProc shutting down.
+(Worker_TP2 pid=317709) INFO 04-29 21:31:01 [multiproc_executor.py:859] WorkerProc shutting down.
+(Worker_TP3 pid=317710) INFO 04-29 21:31:01 [multiproc_executor.py:859] WorkerProc shutting down.
+--------------------------------------------------
+Prompt: 'Hello, my name is'
+Generated text: ' Sarah. I am a 22-year-old woman who has been experiencing some issues with my menstrual cycle. I have been having irregular periods, and I have'
+--------------------------------------------------
+Prompt: 'The president of the United States is'
+Generated text: ' the commander-in-chief of the armed forces, and the president is also the head of the executive branch of the federal government. The president is responsible for enforcing laws'
+--------------------------------------------------
+Prompt: 'The capital of France is'
+Generated text: ' Paris. The capital of the United Kingdom is London. The capital of Germany is Berlin. The capital of Italy is Rome. The capital of Spain is Madrid.'
+--------------------------------------------------
+Prompt: 'The future of AI is'
+Generated text: ' not just about the technology itself, but about how it is used to solve real-world problems. As AI continues to evolve, it will become more integrated into our'
+--------------------------------------------------
