@@ -54,6 +54,22 @@ DTYPE_FP8 = torch.float8_e4m3fn if hasattr(torch, "float8_e4m3fn") else None
 DEVICE = "xpu:0" if torch.xpu.is_available() else "cuda:0"
 EPSILON = 1e-5
 
+# Observed batch sizes from profiling (representing different vLLM phases)
+# Based on actual dynamic shapes during inference
+WARMUP_BATCH_SIZES = [2048, 8192]  # max_num_batched_tokens during warmup
+CHUNKED_PREFILL_BATCH_SIZES = [5, 8, 12, 16, 1024, 4096]  # chunked prefill
+MIXED_BATCH_SIZES = [4153, 7177]  # mixed prefill/decode batches
+DECODE_BATCH_SIZES = list(range(1, 17))  # decode (max_num_seqs=16, decreasing)
+ALL_BATCH_SIZES = WARMUP_BATCH_SIZES + CHUNKED_PREFILL_BATCH_SIZES + MIXED_BATCH_SIZES
+
+# Hidden dimensions from profiled models
+HIDDEN_DIMS = [2048, 8192]  # Qwen3-32B (2048), Llama-3.3-70B (8192)
+INTERMEDIATE_DIMS = [2816, 5632, 14336]  # FFN intermediate (32B: 5632, 70B: 14336)
+
+# Attention configurations
+NUM_HEADS = [16, 20, 32]  # Qwen3-32B: 16, Qwen3-30B: 20, Llama-70B: 32
+HEAD_DIMS = [64, 128, 256]  # Standard head dimensions
+
 # Check for vLLM ops availability
 HAS_SILU_AND_MUL = hasattr(torch.ops, "_C") and hasattr(torch.ops._C, "silu_and_mul")
 HAS_FP8_GEMM = hasattr(torch.ops, "_xpu_C") and hasattr(
@@ -184,10 +200,20 @@ class TestActivationOps:
     """Test vLLM activation operations."""
 
     @pytest.mark.skipif(not HAS_SILU_AND_MUL, reason="silu_and_mul op not available")
-    @pytest.mark.parametrize("batch_size", [1, 16, 256])
-    @pytest.mark.parametrize("hidden_dim", [2816, 5632, 14336])
+    @pytest.mark.parametrize(
+        "batch_size",
+        [1, 8, 16] + WARMUP_BATCH_SIZES[:1] + MIXED_BATCH_SIZES[:1],  # Sample key sizes
+    )
+    @pytest.mark.parametrize("hidden_dim", INTERMEDIATE_DIMS)
     def test_silu_and_mul(self, batch_size: int, hidden_dim: int):
-        """Test _C::silu_and_mul against PyTorch reference."""
+        """
+        Test _C::silu_and_mul against PyTorch reference.
+
+        Covers various batch sizes:
+        - 1, 8, 16: decode batches
+        - 2048: warmup phase
+        - 4153: mixed batch
+        """
         # Input: [batch, hidden*2] for gate||value layout
         x = torch.randn(batch_size, hidden_dim * 2, dtype=DTYPE_BF16).to(DEVICE)
 
@@ -201,11 +227,21 @@ class TestActivationOps:
         torch.testing.assert_close(actual, expected, rtol=1e-2, atol=1e-3)
 
     @pytest.mark.skipif(not HAS_SILU_AND_MUL, reason="silu_and_mul op not available")
-    @pytest.mark.parametrize("batch_size", [1, 16])
-    @pytest.mark.parametrize("seq_len", [1, 16, 256])
-    @pytest.mark.parametrize("hidden_dim", [2816, 5632])
+    @pytest.mark.parametrize("batch_size", [1, 8, 16])
+    @pytest.mark.parametrize(
+        "seq_len",
+        [1, 8, 16, 1024],  # decode, small prefill, chunked prefill
+    )
+    @pytest.mark.parametrize("hidden_dim", INTERMEDIATE_DIMS[:2])  # 2816, 5632
     def test_silu_and_mul_3d(self, batch_size: int, seq_len: int, hidden_dim: int):
-        """Test silu_and_mul with 3D tensors [batch, seq, hidden*2]."""
+        """
+        Test silu_and_mul with 3D tensors [batch, seq, hidden*2].
+
+        Tests various sequence lengths from profiling:
+        - 1: single token decode
+        - 8, 16: small batch decode
+        - 1024: chunked prefill
+        """
         x = torch.randn(batch_size, seq_len, hidden_dim * 2, dtype=DTYPE_BF16).to(
             DEVICE
         )
@@ -230,13 +266,21 @@ class TestFlashAttention:
     @pytest.mark.skipif(
         not HAS_VLLM_FLASH_ATTN, reason="vllm_xpu_kernels flash_attn not available"
     )
-    @pytest.mark.parametrize("batch_size", [1, 4])
-    @pytest.mark.parametrize("num_heads", [16, 32])
-    @pytest.mark.parametrize("head_dim", [64, 128])
+    @pytest.mark.parametrize(
+        "batch_size",
+        [1, 8, 16],  # decode batch sizes
+    )
+    @pytest.mark.parametrize("num_heads", NUM_HEADS)
+    @pytest.mark.parametrize("head_dim", HEAD_DIMS[:2])  # 64, 128
     def test_flash_attn_varlen_uniform(
         self, batch_size: int, num_heads: int, head_dim: int
     ):
-        """Test flash_attn_varlen_func with uniform sequence lengths."""
+        """
+        Test flash_attn_varlen_func with uniform sequence lengths.
+
+        Tests standard decode batch sizes (1-16) with actual head configurations
+        from profiled models.
+        """
         seq_len = 128
         total_tokens = batch_size * seq_len
 
@@ -287,16 +331,21 @@ class TestFlashAttention:
     @pytest.mark.skipif(
         not HAS_VLLM_FLASH_ATTN, reason="vllm_xpu_kernels flash_attn not available"
     )
-    @pytest.mark.parametrize("batch_size", [2, 4])
-    @pytest.mark.parametrize("num_heads", [16])
+    @pytest.mark.parametrize("batch_size", [4, 8, 16])
+    @pytest.mark.parametrize("num_heads", [16, 32])
     @pytest.mark.parametrize("head_dim", [128])
     def test_flash_attn_varlen_variable(
         self, batch_size: int, num_heads: int, head_dim: int
     ):
-        """Test flash_attn_varlen_func with variable sequence lengths."""
-        # Variable sequence lengths
+        """
+        Test flash_attn_varlen_func with variable sequence lengths.
+
+        Simulates mixed batch scenarios where sequences have different lengths,
+        as occurs during chunked prefill and mixed prefill/decode batches.
+        """
+        # Variable sequence lengths (simulate chunked prefill + decode mix)
         torch.manual_seed(42)
-        seq_lens = torch.randint(16, 256, (batch_size,)).tolist()
+        seq_lens = torch.randint(8, 512, (batch_size,)).tolist()
         total_tokens = sum(seq_lens)
         max_seq_len = max(seq_lens)
 
@@ -352,18 +401,27 @@ class TestFP8GEMM:
 
     @pytest.mark.skipif(not HAS_FP8_GEMM, reason="fp8_gemm_w8a16 op not available")
     @pytest.mark.skipif(DTYPE_FP8 is None, reason="FP8 dtype not available")
-    @pytest.mark.parametrize("batch_size", [1, 16])
-    @pytest.mark.parametrize("seq_len", [1, 16])
-    @pytest.mark.parametrize("in_features", [8192])
-    @pytest.mark.parametrize("out_features", [8192, 14336])
+    @pytest.mark.parametrize(
+        "total_tokens",
+        [1, 8, 16, 1024, 2048, 4096],  # decode, chunked prefill, warmup
+    )
+    @pytest.mark.parametrize("in_features", [8192])  # Llama-3.3-70B hidden dim
+    @pytest.mark.parametrize("out_features", [8192, 14336])  # hidden, intermediate
     def test_fp8_gemm_w8a16(
-        self, batch_size: int, seq_len: int, in_features: int, out_features: int
+        self, total_tokens: int, in_features: int, out_features: int
     ):
-        """Test _xpu_C::fp8_gemm_w8a16 (FP8 W8A16 GEMM)."""
-        # Input in BF16
-        input_tensor = torch.randn(
-            batch_size, seq_len, in_features, dtype=DTYPE_BF16
-        ).to(DEVICE)
+        """
+        Test _xpu_C::fp8_gemm_w8a16 (FP8 W8A16 GEMM).
+
+        Tests various token counts from Llama-3.3-70B profiling:
+        - 1, 8, 16: decode batches
+        - 1024: chunked prefill
+        - 2048, 4096: warmup phase
+        """
+        # Input in BF16: [total_tokens, in_features]
+        input_tensor = torch.randn(total_tokens, in_features, dtype=DTYPE_BF16).to(
+            DEVICE
+        )
 
         # Weight in FP8 (simulated by quantizing FP32)
         weight_fp32 = torch.randn(out_features, in_features).to(DEVICE)
@@ -374,9 +432,7 @@ class TestFP8GEMM:
 
         # Reference: Dequantize to BF16 and compute
         weight_bf16 = weight_fp8.to(DTYPE_BF16) * weight_scale.unsqueeze(1)
-        input_2d = input_tensor.reshape(-1, in_features)
-        expected = torch.mm(input_2d, weight_bf16.t())
-        expected = expected.reshape(batch_size, seq_len, out_features)
+        expected = torch.mm(input_tensor, weight_bf16.t())
 
         # vLLM FP8 GEMM
         actual = torch.ops._xpu_C.fp8_gemm_w8a16(
@@ -424,14 +480,24 @@ class TestCacheOps:
     @pytest.mark.skipif(
         not HAS_CACHE_OPS, reason="reshape_and_cache_flash op not available"
     )
-    @pytest.mark.parametrize("num_tokens", [1, 16, 256])
-    @pytest.mark.parametrize("num_heads", [16, 32])
-    @pytest.mark.parametrize("head_dim", [64, 128])
-    @pytest.mark.parametrize("block_size", [16, 32])
+    @pytest.mark.parametrize(
+        "num_tokens",
+        [1, 8, 16, 1024, 4096],  # decode, chunked prefill, warmup
+    )
+    @pytest.mark.parametrize("num_heads", NUM_HEADS[:2])  # 16, 20
+    @pytest.mark.parametrize("head_dim", HEAD_DIMS[:2])  # 64, 128
+    @pytest.mark.parametrize("block_size", [16])  # vLLM default block size
     def test_reshape_and_cache_flash(
         self, num_tokens: int, num_heads: int, head_dim: int, block_size: int
     ):
-        """Test _C_cache_ops::reshape_and_cache_flash."""
+        """
+        Test _C_cache_ops::reshape_and_cache_flash.
+
+        Tests various token counts from profiling:
+        - 1, 8, 16: decode batches
+        - 1024: chunked prefill
+        - 4096: warmup/large prefill
+        """
         num_blocks = (num_tokens + block_size - 1) // block_size + 10
 
         key = torch.randn(num_tokens, num_heads, head_dim, dtype=DTYPE_BF16).to(DEVICE)
@@ -485,15 +551,19 @@ class TestMoEOps:
     @pytest.mark.skipif(
         not HAS_GROUPED_GEMM, reason="cutlass_grouped_gemm_interface not available"
     )
-    @pytest.mark.parametrize("num_experts", [8, 64])
-    @pytest.mark.parametrize("hidden_dim", [2048])
-    @pytest.mark.parametrize("intermediate_dim", [5632])
+    @pytest.mark.parametrize("num_experts", [8, 64])  # Qwen3-30B-A3B: 64 experts
+    @pytest.mark.parametrize("hidden_dim", [2048])  # Qwen3-30B hidden dim
+    @pytest.mark.parametrize(
+        "intermediate_dim",
+        [5632],  # MoE intermediate dimension
+    )
     def test_grouped_gemm_basic(
         self, num_experts: int, hidden_dim: int, intermediate_dim: int
     ):
         """
         Test _xpu_C::cutlass_grouped_gemm_interface for MoE.
 
+        Tests MoE grouped GEMM from Qwen3-30B-A3B profiling.
         Note: This is a basic correctness test. Full MoE routing is complex
         and tested in MoE-specific test files.
         """
@@ -532,17 +602,35 @@ class TestIntegration:
         not (HAS_VLLM_FLASH_ATTN and HAS_SILU_AND_MUL and HAS_CACHE_OPS),
         reason="Requires flash_attn, silu_and_mul, and cache ops",
     )
-    def test_transformer_layer_pattern(self):
-        """Test common pattern: attention + cache + activation."""
-        batch_size = 4
-        seq_len = 128
+    @pytest.mark.parametrize(
+        "total_tokens",
+        [16, 1024],  # decode batch, chunked prefill
+    )
+    def test_transformer_layer_pattern(self, total_tokens: int):
+        """
+        Test common pattern: attention + cache + activation.
+
+        Integration test combining multiple vLLM ops in typical sequence:
+        Flash Attention -> KV Cache -> SiLU Activation
+
+        Tests both decode (16 tokens) and chunked prefill (1024 tokens) scenarios.
+        """
         num_heads = 16
         head_dim = 128
         hidden_dim = num_heads * head_dim
         intermediate_dim = hidden_dim * 2
 
+        # Simulate batch structure for total_tokens
+        if total_tokens == 16:
+            # Decode: 16 sequences, 1 token each
+            batch_size = 16
+            seq_len = 1
+        else:
+            # Chunked prefill: 4 sequences with varying lengths
+            batch_size = 4
+            seq_len = total_tokens // batch_size
+
         # 1. Flash Attention
-        total_tokens = batch_size * seq_len
         query = torch.randn(total_tokens, num_heads, head_dim, dtype=DTYPE_BF16).to(
             DEVICE
         )
